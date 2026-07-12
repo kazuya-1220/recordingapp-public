@@ -74,18 +74,16 @@ export async function detectNeedsInvestigation(transcript: string): Promise<bool
 // エラー時は静かに空配列を返す。過去の文字起こしはあくまで補助的なコンテキスト。
 export async function fetchPastTranscripts(userId: string, customerNumber?: string, limit = 5): Promise<PastTranscript[]> {
   try {
-    let q;
-    if (customerNumber && customerNumber.trim()) {
-      // Prioritize: all recordings for this customer number (any user)
-      q = query(collection(db, 'recordings'), where('customerNumber', '==', customerNumber.trim()));
-    } else if (userId) {
-      // Fallback: current user's recent recordings when no customer context
-      q = query(collection(db, 'recordings'), where('userId', '==', userId));
-    } else {
-      return [];
-    }
+    if (!userId) return [];
+    // Query only the signed-in user's own records (satisfies the owner-only
+    // Firestore rule and needs no composite index); narrow to the customer
+    // client-side when a customer number is supplied.
+    const q = query(collection(db, 'recordings'), where('userId', '==', userId));
     const snapshot = await getDocs(q);
-    const recordings = snapshot.docs.map((d) => {
+    const cust = customerNumber && customerNumber.trim() ? customerNumber.trim() : null;
+    const recordings = snapshot.docs
+      .filter((d) => !cust || (d.data() as any).customerNumber === cust)
+      .map((d) => {
       const data = d.data() as any;
       return {
         title: data.title || '無題',

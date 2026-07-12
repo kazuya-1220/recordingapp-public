@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { collection, query, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { ViewState } from '../App';
 import { Recording } from '../types';
@@ -117,7 +117,9 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
   useEffect(() => {
     if (!user) return;
 
-    const q = query(collection(db, 'recordings'));
+    // Scope to the signed-in user's own records so the list query satisfies the
+    // owner-only Firestore rule (each account sees only its own recordings).
+    const q = query(collection(db, 'recordings'), where('userId', '==', user.uid));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
