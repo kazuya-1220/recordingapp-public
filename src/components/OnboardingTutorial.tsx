@@ -32,7 +32,7 @@ const steps: Step[] = [
   {
     icon: Radio,
     title: 'レコーディングアプリへようこそ',
-    description: '会議を録音して、自動で文字起こし・要約・Kintone同期まで行うアプリです。',
+    description: '会議を録音して、自動で文字起こし・要約・CRM同期まで行うアプリです。',
     mockScreen: (
       <MockPhone>
         <div className="bg-white dark:bg-slate-800 h-full flex flex-col items-center justify-center p-6 text-center">
@@ -41,7 +41,7 @@ const steps: Step[] = [
           </div>
           <h3 className="font-extrabold text-base text-slate-900 dark:text-slate-100 mb-1">レコーディングアプリ</h3>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-            録音 → 文字起こし → AI要約 → Kintone同期<br />
+            録音 → 文字起こし → AI要約 → CRM同期<br />
             すべて自動で完了します
           </p>
         </div>
@@ -51,7 +51,7 @@ const steps: Step[] = [
   {
     icon: Mic,
     title: '録音を開始する',
-    description: '録音ボタンを押して会議を録音。顧客番号でKintoneルックアップ、参加者の追加、ファイル添付も録音中に行えます。',
+    description: '録音ボタンを押して会議を録音。顧客番号でCRMルックアップ、参加者の追加、ファイル添付も録音中に行えます。',
     mockScreen: (
       <MockPhone>
         <div className="bg-blue-600 px-3 py-2 flex items-center gap-2">
@@ -66,7 +66,7 @@ const steps: Step[] = [
           <div className="bg-white dark:bg-slate-800 rounded-lg p-3 border border-slate-200 dark:border-slate-700">
             <p className="text-[10px] font-bold text-slate-400 mb-1">参加者</p>
             <div className="flex gap-1">
-              <span className="bg-blue-100 text-blue-700 text-[9px] px-1.5 py-0.5 rounded-full font-bold">原 寿基</span>
+              <span className="bg-blue-100 text-blue-700 text-[9px] px-1.5 py-0.5 rounded-full font-bold">田中 太郎</span>
               <span className="bg-blue-100 text-blue-700 text-[9px] px-1.5 py-0.5 rounded-full font-bold">+ 追加</span>
             </div>
           </div>
@@ -113,7 +113,7 @@ const steps: Step[] = [
   {
     icon: Search,
     title: '履歴で確認・編集',
-    description: '過去の録音を検索し、AI要約の確認・編集・再生成が可能。Kintoneへの手動同期もここから行えます。',
+    description: '過去の録音を検索し、AI要約の確認・編集・再生成が可能。CRMへの手動同期もここから行えます。',
     mockScreen: (
       <MockPhone>
         <div className="bg-white dark:bg-slate-800 px-3 py-2 border-b border-slate-200 dark:border-slate-700">
@@ -129,7 +129,7 @@ const steps: Step[] = [
           {[
             { title: '㈱サンプル商事 打合せ', date: '2026/07/05', synced: true },
             { title: '㈲田中建設 決算', date: '2026/07/03', synced: true },
-            { title: '個人 山田太郎 確定申告', date: '2026/07/01', synced: false },
+            { title: '個人 田中太郎 確定申告', date: '2026/07/01', synced: false },
           ].map((r, i) => (
             <div key={i} className="bg-white dark:bg-slate-800 rounded-lg p-2.5 border border-slate-200 dark:border-slate-700">
               <div className="flex items-center justify-between">
@@ -165,7 +165,7 @@ const steps: Step[] = [
           <p>・減価償却の特例適用を検討</p>
           <p>・消費税の簡易課税選択について確認</p>
           <p className="font-bold text-slate-900 dark:text-slate-100 mt-2">## 宿題・アクション</p>
-          <p>・原：特例適用の試算を7/10までに作成</p>
+          <p>・田中：特例適用の試算を7/10までに作成</p>
           <p className="font-bold text-slate-900 dark:text-slate-100 mt-2">## 次回打合せ予定</p>
           <p>7月20日 14:00</p>
         </div>

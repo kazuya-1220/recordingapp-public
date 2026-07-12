@@ -131,6 +131,8 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
   const [isStarting, setIsStarting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // CRM sync success popup (shown after POST /api/kintone/sync returns success)
+  const [syncSuccess, setSyncSuccess] = useState<{ summary: string; recordUrl: string | null } | null>(null);
   const [silenceWarning, setSilenceWarning] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [feedTab, setFeedTab] = useState<'tl' | 'raw'>('tl');
@@ -544,7 +546,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
 
   const searchCustomers = async (keyword: string) => {
     if (!kintoneConfig?.domain || !kintoneConfig?.customerAppId || !kintoneConfig?.customerApiToken) {
-      setLookupError('Kintone設定が未設定です。管理者に確認してください。');
+      setLookupError('CRM設定が未設定です。管理者に確認してください。');
       return;
     }
     setIsSearchingCustomers(true);
@@ -584,7 +586,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
   };
 
   const handleStopRecording = () => {
-    if (!window.confirm('録音を停止して保存・Kintone送信しますか？')) return;
+    if (!window.confirm('録音を停止して保存・CRM送信しますか？')) return;
     autoSaveRef.current = true;
     stopRecording();
   };
@@ -733,6 +735,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
         throw firestoreErr;
       }
 
+      let syncResult: { summary: string; recordUrl: string | null } | null = null;
       try {
         const settings = await getKintoneSettings();
         if (settings.domain && settings.appId && settings.apiToken) {
@@ -770,6 +773,10 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
               kintoneRecordUrl: kintoneData.recordUrl || '',
               kintoneRecordId: kintoneData.recordId ? String(kintoneData.recordId) : '',
             });
+            syncResult = {
+              summary: kintoneData.summary || '',
+              recordUrl: kintoneData.recordUrl || null,
+            };
           }
         }
       } catch (kintoneErr: any) {
@@ -780,7 +787,13 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
       setLiveAttachments([]);
       setExpandedOcr(new Set());
       resetRecording();
-      onViewChange('dashboard');
+      // If the CRM sync succeeded, surface a completion popup (the user closes it
+      // to return to the dashboard). Otherwise navigate straight to the dashboard.
+      if (syncResult) {
+        setSyncSuccess(syncResult);
+      } else {
+        onViewChange('dashboard');
+      }
     } catch (e: any) {
       console.error(e);
       setSaveError(`保存に失敗しました: ${e?.message || 'Unknown error'} — ネットワークを確認して再試行してください。`);
@@ -854,7 +867,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
             (isSaving || hasAudio) ? (
               <div className="w-full md:w-auto flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-blue-900/40 border border-blue-700">
                 <Loader2 className="w-5 h-5 animate-spin text-blue-300" />
-                <span className="text-blue-200 font-bold whitespace-nowrap">保存・Kintone送信中...</span>
+                <span className="text-blue-200 font-bold whitespace-nowrap">保存・CRM送信中...</span>
               </div>
             ) : (
               <button
@@ -909,7 +922,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
           <div className="flex justify-between items-center">
             <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
               <Search className="w-4 h-4 text-blue-600" />
-              kintone顧客DBルックアップ
+              CRM顧客DBルックアップ
             </h3>
             {selectedCustomer && (
               <span className="text-[10px] bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 px-2 py-1 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">
@@ -939,7 +952,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
                 <input
                   ref={customerInputRef}
                   type="text"
-                  placeholder="顧問先名または顧問先番号を入力して検索..."
+                  placeholder="顧問先名・番号で検索、または顧客名を直接入力..."
                   value={customerKeyword}
                   onChange={(e) => setCustomerKeyword(e.target.value)}
                   onKeyDown={handleCustomerInputKeyDown}
@@ -953,6 +966,25 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
                 </div>
               </div>
               {lookupError && <p className="text-xs text-red-500 font-medium">{lookupError}</p>}
+              {/* Free-text entry: use whatever the user typed directly as the
+                  customer name, even if it isn't in the CRM lookup results. */}
+              {customerKeyword.trim() && !isSearchingCustomers && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const name = customerKeyword.trim();
+                    const c = { name, number: '', submitNo: '' };
+                    setSelectedCustomer(c);
+                    setCustomers([]);
+                    setCustomerKeyword('');
+                    syncSessionUpdate({ customerName: name, customerNumber: '', customerSubmitNo: '' });
+                  }}
+                  className="w-full text-left px-4 py-2.5 border border-dashed border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-600 dark:text-slate-300 hover:border-blue-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors active:scale-[0.99] duration-150 flex items-center gap-2"
+                >
+                  <UserPlus className="w-4 h-4 shrink-0" />
+                  <span className="truncate">「{customerKeyword.trim()}」をそのまま顧客名として使用</span>
+                </button>
+              )}
               {customers.length > 0 && (
                 <div
                   ref={customerListRef}
@@ -1111,7 +1143,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
       <div className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5 space-y-2">
           <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
             <Paperclip className="w-4 h-4 text-blue-600" />
-            添付資料（AI解析・Kintone保存用）
+            添付資料（AI解析・CRM保存用）
             {(attachmentItems.length + liveAttachments.length) > 0 && (
               <span className="ml-auto text-[10px] font-bold bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full border border-blue-100 dark:border-blue-800">
                 {attachmentItems.length + liveAttachments.length}件
@@ -1341,7 +1373,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
             }}
           />
           {(attachmentItems.length + liveAttachments.length) > 0 && (
-            <p className="text-[11px] text-slate-400 dark:text-slate-500">Kintone送信時にAI要約の参考資料として使用し、Kintoneの添付ファイルに保存されます。</p>
+            <p className="text-[11px] text-slate-400 dark:text-slate-500">CRM送信時にAI要約の参考資料として使用し、CRMの添付ファイルに保存されます。</p>
           )}
       </div>
 
@@ -1501,6 +1533,62 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
             {isSaving ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Save className="w-5 h-5 mr-2" />}
             再試行して保存する
           </button>
+        </div>
+      )}
+
+      {/* CRM sync success popup */}
+      {syncSuccess && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          onClick={() => { setSyncSuccess(null); onViewChange('dashboard'); }}
+        >
+          <div
+            className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="p-6 flex flex-col items-center text-center gap-3">
+              <div className="w-14 h-14 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center">
+                <Check className="w-8 h-8 text-green-600 dark:text-green-400" />
+              </div>
+              <p className="text-lg font-bold text-slate-800 dark:text-slate-100">CRM へ API 送信できました</p>
+              {syncSuccess.summary && (
+                <p className="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap max-h-32 overflow-y-auto w-full">
+                  {syncSuccess.summary}
+                </p>
+              )}
+              {/* Intended navigation to the CRM record. recordUrl is null in the
+                  demo, so the link is present but clearly non-functional. */}
+              {syncSuccess.recordUrl ? (
+                <a
+                  href={syncSuccess.recordUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold py-3 px-6 rounded-xl transition-all duration-150"
+                >
+                  CRM で開く
+                </a>
+              ) : (
+                <div className="w-full flex flex-col items-center gap-1">
+                  <button
+                    type="button"
+                    disabled
+                    title="デモ環境では遷移しません"
+                    className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-bold py-3 px-6 rounded-xl opacity-50 cursor-not-allowed"
+                  >
+                    CRM で開く
+                  </button>
+                  <span className="text-[11px] text-slate-400">デモ環境では遷移しません</span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => { setSyncSuccess(null); onViewChange('dashboard'); }}
+                className="w-full flex items-center justify-center gap-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 px-6 rounded-xl transition-colors active:scale-95 duration-150"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

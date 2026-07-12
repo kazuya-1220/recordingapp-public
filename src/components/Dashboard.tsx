@@ -217,7 +217,7 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
   const handleKintoneSync = async (recording: Recording) => {
     const settings = await getKintoneSettings();
     if (!settings.domain || !settings.appId || !settings.apiToken) {
-      alert('Kintoneの設定が行われていません。管理者に設定を依頼してください。');
+      alert('CRMの設定が行われていません。管理者に設定を依頼してください。');
       return;
     }
 
@@ -266,14 +266,14 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
         handleFirestoreError(firestoreErr, OperationType.UPDATE, `recordings/${recording.id}`);
       }
 
-      alert('Kintoneへの連携とAI要約の保存が完了しました！');
+      alert('CRM へ API 送信できました');
 
       // Open the Kintone record in a new tab (browser only)
       if (result?.recordUrl) {
         window.open(result.recordUrl, '_blank', 'noopener,noreferrer');
       }
     } catch (e: any) {
-      alert('Kintone連携に失敗しました: ' + e.message);
+      alert('CRM連携に失敗しました: ' + e.message);
     } finally {
       setSyncingId(null);
     }
@@ -1130,13 +1130,24 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
                       style={{ backgroundColor: 'rgb(255, 204, 0)', color: '#1a1a1a' }}
                     >
                       {syncingId === rec.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
-                      Kintone送信
+                      CRM送信
                     </button>
                   )}
-                  {rec.kintoneRecordUrl && (
+                  {rec.kintoneRecordUrl ? (
                     <a href={rec.kintoneRecordUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full hover:opacity-90" style={{ backgroundColor: 'rgb(255, 204, 0)', color: '#1a1a1a' }}>
                       <ExternalLink className="w-3.5 h-3.5" />
+                      CRM で開く
                     </a>
+                  ) : (
+                    <span
+                      aria-disabled="true"
+                      title="CRM のレコード URL がありません"
+                      className="flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full opacity-50 cursor-not-allowed"
+                      style={{ backgroundColor: 'rgb(255, 204, 0)', color: '#1a1a1a' }}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      CRM で開く
+                    </span>
                   )}
                   <button
                     onClick={() => setModalFullscreen(v => !v)}
@@ -1472,7 +1483,7 @@ function SummaryEditor({
       }
       setPanel(null);
       setPrompt('');
-      flashSuccess(kintoneUpdated ? 'Kintone も更新しました' : '更新しました');
+      flashSuccess(kintoneUpdated ? 'CRM も更新しました' : '更新しました');
     } catch (e: any) {
       setError(e?.message || '再生成に失敗しました');
     } finally {
@@ -1520,7 +1531,7 @@ function SummaryEditor({
         handleFirestoreError(fsErr, OperationType.UPDATE, `recordings/${rec.id}`);
       }
       setPanel(null);
-      flashSuccess(kintoneUpdated ? 'Kintone も更新しました' : '更新しました');
+      flashSuccess(kintoneUpdated ? 'CRM も更新しました' : '更新しました');
     } catch (e: any) {
       setError(e?.message || '保存に失敗しました');
     } finally {
@@ -1665,7 +1676,7 @@ function SummaryEditor({
                     </span>
                     {entry.kintoneUpdated && (
                       <span className="px-1.5 py-0.5 rounded font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
-                        Kintone
+                        CRM
                       </span>
                     )}
                     {isRegen && entry.prompt && (

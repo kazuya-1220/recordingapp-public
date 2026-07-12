@@ -136,7 +136,7 @@ export function PromptSettings({ onViewChange, userEmail }: {
         <textarea
           value={settings.wordCorrections}
           onChange={e => setSettings(prev => ({ ...prev, wordCorrections: e.target.value }))}
-          placeholder={`例：\nさわだ → 沢田\nたっくすぶれーん → タックスブレーン\nかずや → 佐々木数弥`}
+          placeholder={`例：\nたなか → 田中\nさくらしょうじ → さくら商事\nはなこ → 鈴木 花子`}
           className="w-full rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-slate-100 resize-none"
           style={{ fontSize: '16px' }}
           rows={6}

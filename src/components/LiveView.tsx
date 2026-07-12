@@ -239,7 +239,7 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
 
   const searchCustomers = async (keyword: string) => {
     if (!kintoneConfig?.domain || !kintoneConfig?.customerAppId || !kintoneConfig?.customerApiToken) {
-      setLookupError('Kintone設定が未設定です。');
+      setLookupError('CRM設定が未設定です。');
       return;
     }
     setIsSearchingCustomers(true);
@@ -337,6 +337,9 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
     e.preventDefault();
     const sid = sessionId.trim();
     if (!sid) return;
+    // Keep state in sync with the trimmed id so the onSnapshot subscription
+    // (which keys off `sessionId`) targets the exact same doc we seed below.
+    if (sid !== sessionId) setSessionId(sid);
     setIsJoined(true);
     // Immediately seed state from Firestore so iOS doesn't show empty data
     // while the onSnapshot connection warms up (cold-start latency fix).
@@ -355,7 +358,10 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
       } else {
         setLiveText('待機中...');
       }
-    } catch {
+    } catch (e) {
+      // Surface read failures (e.g. Firestore permission-denied when security
+      // rules aren't deployed) instead of silently showing the waiting state.
+      console.error('[LiveView] Failed to seed live session', `liveSessions/${sid}`, e);
       setLiveText('待機中...');
     }
   };
@@ -455,7 +461,7 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
               <div className="flex justify-between items-center">
                 <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
                   <Search className="w-4 h-4 text-emerald-600" />
-                  kintone顧客DBルックアップ
+                  CRM顧客DBルックアップ
                 </h3>
                 {selectedCustomer && (
                   <span className="text-[10px] bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800 px-2 py-1 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">

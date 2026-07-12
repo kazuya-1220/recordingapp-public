@@ -166,7 +166,7 @@ function AppContent() {
         </div>
         <h1 className="text-3xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-2">レコーディングアプリ</h1>
         <p className="text-slate-500 dark:text-slate-400 mb-8 max-w-sm text-base leading-relaxed">
-          Kintoneとすべてのデバイス間で、音声セッションを安全に録音・文字起こし・同期できます。
+          CRMとすべてのデバイス間で、音声セッションを安全に録音・文字起こし・同期できます。
         </p>
         <button
           onClick={handleSignIn}

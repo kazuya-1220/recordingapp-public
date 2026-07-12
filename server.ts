@@ -33,7 +33,7 @@ function decodeOriginalName(name: string): string {
 }
 
 // ── Google Cloud Storage (persistent audio/attachment storage) ────────────
-const GCS_BUCKET = process.env.GCS_BUCKET || 'recordingapp-500917-audio';
+const GCS_BUCKET = process.env.GCS_BUCKET || 'it-kadai-audio';
 let gcsStorage: Storage | null = null;
 try {
   gcsStorage = new Storage();
@@ -68,12 +68,12 @@ async function getFileBuffer(filename: string): Promise<Buffer | null> {
 
 // ── Kintone Rich-text helpers ──────────────────────────────────────────────
 
+// NOTE: fictional names for the public demo only.
 const TAX_BRAIN_MEMBER_SET = new Set([
-  '原 寿基', '佐藤 孝明', '近藤 信二', '牧野 香久美', '成田 さや香',
-  '会田 大悟', '田澤 もえ子', '佐々木 数彌', '池内 美穂', '上野 恭平',
-  '山本 和輝', '岡部 瑠一', '堀越 貴裕', '川下 千春', '大村 葵',
-  '沢田 秀和', '大野 美緒', '村上 結子', '向井 香織', '荒木 智香子',
-  '髙栁 由美', '池内 みどり',
+  '田中 太郎', '鈴木 花子', '高橋 健一', '渡辺 美咲', '伊藤 大輔',
+  '山田 由美', '中村 翔太', '小林 彩香', '加藤 直樹', '吉田 恵子',
+  '松本 亮', '井上 真央', '木村 拓也', '林 さやか', '清水 隆',
+  '山下 一馬',
 ]);
 
 function escapeHtml(s: string): string {
@@ -298,7 +298,7 @@ async function startServer() {
     try {
       if (!req.file) return res.status(400).json({ error: 'No audio file' });
 
-      const project = process.env.GOOGLE_CLOUD_PROJECT || 'recordingapp-500917';
+      const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
       const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
       const ai = new GoogleGenAI({ vertexai: true, project, location });
 
@@ -357,7 +357,7 @@ async function startServer() {
     const files = (req.files as { [k: string]: Express.Multer.File[] })?.['files'] || [];
     if (files.length === 0) return res.json({ results: [] });
 
-    const project = process.env.GOOGLE_CLOUD_PROJECT || 'recordingapp-500917';
+    const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
     const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
     const ai = new GoogleGenAI({ vertexai: true, project, location });
 
@@ -436,7 +436,7 @@ async function startServer() {
   async function generateFormattedText(rawText: string): Promise<string | null> {
     if (!rawText || rawText.trim().length < 10) return null;
     try {
-      const project = process.env.GOOGLE_CLOUD_PROJECT || 'recordingapp-500917';
+      const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
       const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
       const ai = new GoogleGenAI({ vertexai: true, project, location });
       const prompt = `以下の会話の文字起こしテキストを読みやすく校正・整形してください。
@@ -485,7 +485,7 @@ ${rawText}`;
       return '（音声文字起こしデータがないため、要約を作成できませんでした）';
     }
     try {
-      const project = process.env.GOOGLE_CLOUD_PROJECT || 'recordingapp-500917';
+      const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
       const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
       const ai = new GoogleGenAI({ vertexai: true, project, location });
 
@@ -571,345 +571,91 @@ ${ocrSection}${fileListNote}${extra}
     }).join('\n');
   }
 
-  app.post('/api/kintone/sync', async (req, res) => {
-    const { domain, appId, apiToken, title, text, formattedText, timedLines,
-      createdAt, audioUrl, attachments: attachmentsParam, attachmentUrl, attachmentName,
-      customerNumber, customerName, customerSubmitNo, participants, participantEmails,
-      lookupFieldCode, staffFieldCode, userDisplayName, appOrigin, id: recordingId,
-      extraInstruction, geminiResult } = req.body;
 
-    // Support new array format and legacy single-field format
+  // ── CRM sync (public demo) ─────────────────────────────────────────────────
+  // External CRM (Kintone) integration is intentionally DISABLED in this public
+  // demo. We still generate the AI summary / formatted transcript, then return a
+  // mock success so the UI can show a "CRM へ API 送信できました" completion status
+  // without contacting any external system.
+  app.post('/api/kintone/sync', async (req, res) => {
+    const { text, formattedText, createdAt, customerName, participants,
+      attachments: attachmentsParam, attachmentUrl, attachmentName,
+      extraInstruction } = req.body;
+
     const attachmentsList: Array<{ url: string; name: string; ocrText?: string | null }> =
       Array.isArray(attachmentsParam) ? attachmentsParam :
       (attachmentUrl ? [{ url: attachmentUrl, name: attachmentName || '', ocrText: null }] : []);
-    
-    if (!domain || !appId || !apiToken) {
-      return res.status(400).json({ error: 'Missing Kintone configuration.' });
-    }
-
-    const cleanDomain = domain.trim().replace(/^(https?:\/\/)/i, '').replace(/\/+$/, '');
 
     try {
-      validateAscii(apiToken, 'APIトークン');
-      validateAscii(cleanDomain, 'サブドメイン');
-    } catch (err: any) {
-      return res.status(400).json({ error: err.message });
-    }
-
-    try {
-      // 1a. If the client didn't send a formatted transcript (Gemini may have
-      // failed at record-time), regenerate it here so 文字起こし_整形 always gets
-      // a meaningful value.
-      let effectiveFormattedText: string | null = (typeof formattedText === 'string' && formattedText.trim()) ? formattedText : null;
-      if (!effectiveFormattedText && text && text.trim()) {
-        console.log('[sync] formattedText was empty — regenerating…');
-        effectiveFormattedText = await generateFormattedText(text);
-      }
-
-      // 1b. Generate the AI summary via the shared helper
-      const summaryText = await generateSummary({
-        text: text || '',
-        createdAt,
-        customerName,
-        participants,
-        attachmentsList,
-        extraInstruction: extraInstruction || undefined,
-      });
-
-      // 2. Upload files to Kintone
-      // audioFileKey → 録音データ, attachmentFileKeys → 添付ファイル (kept separate now)
-      let audioFileKey: string | null = null;
-      if (audioUrl) {
-        const audioFilename = path.basename(
-          audioUrl.startsWith('/api/files/') ? audioUrl.replace('/api/files/', '') : audioUrl
-        );
-        const audioBuffer = await getFileBuffer(audioFilename);
-        if (audioBuffer) {
-          const audioBlob = new Blob([audioBuffer], { type: 'audio/webm' });
-          const uploadFormData = new FormData();
-          uploadFormData.append('file', audioBlob, `recording_${Date.now()}.webm`);
-          const uploadUrl = `https://${cleanDomain}/k/v1/file.json`;
-          console.log(`Uploading audio to Kintone: ${uploadUrl}`);
-          const uploadRes = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: { 'X-Cybozu-API-Token': apiToken },
-            body: uploadFormData
-          });
-          const uploadText = await uploadRes.text();
-          let uploadData: any;
-          try { uploadData = JSON.parse(uploadText); } catch { uploadData = null; }
-          if (!uploadRes.ok) {
-            throw new Error(`Kintone File Upload Error (HTTP ${uploadRes.status}): ${uploadData?.message || uploadText.slice(0, 500)}`);
-          }
-          if (!uploadData?.fileKey) {
-            throw new Error(`Kintone File Upload response was invalid: ${uploadText.slice(0, 500)}`);
-          }
-          audioFileKey = uploadData.fileKey;
-          console.log(`Audio uploaded to Kintone, fileKey: ${audioFileKey}`);
-        } else {
-          console.warn(`Audio file not found (local or GCS): ${audioFilename}`);
-        }
-      }
-
-      // 2b. Upload Attachment Files to Kintone (multiple, with GCS fallback)
-      const attachmentFileKeys: string[] = [];
-      const attMimeMap: Record<string, string> = {
-        '.pdf': 'application/pdf',
-        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-        '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-        '.tiff': 'image/tiff', '.tif': 'image/tiff',
-        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        '.xls': 'application/vnd.ms-excel',
-        '.csv': 'text/csv', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        '.doc': 'application/msword', '.txt': 'text/plain',
-      };
-      for (const att of attachmentsList) {
-        const attFilename = path.basename(
-          att.url.startsWith('/api/files/') ? att.url.replace('/api/files/', '') : att.url
-        );
-        const attBuffer = await getFileBuffer(attFilename);
-        if (!attBuffer) {
-          console.warn(`Attachment not found (local or GCS): ${attFilename}`);
-          continue;
-        }
-        const ext = path.extname(att.name || attFilename).toLowerCase();
-        const attMime = attMimeMap[ext] || 'application/octet-stream';
-        const attBlob = new Blob([attBuffer], { type: attMime });
-        const attFd = new FormData();
-        attFd.append('file', attBlob, att.name || `attachment${ext}`);
-        const attUpRes = await fetch(`https://${cleanDomain}/k/v1/file.json`, {
-          method: 'POST',
-          headers: { 'X-Cybozu-API-Token': apiToken },
-          body: attFd
+      // Best-effort AI summary (never blocks the mock CRM success).
+      let summaryText = '';
+      try {
+        summaryText = await generateSummary({
+          text: text || '',
+          createdAt,
+          customerName,
+          participants,
+          attachmentsList,
+          extraInstruction: extraInstruction || undefined,
         });
-        const attUpText = await attUpRes.text();
-        let attUpData: any;
-        try { attUpData = JSON.parse(attUpText); } catch { attUpData = null; }
-        if (attUpRes.ok && attUpData?.fileKey) {
-          attachmentFileKeys.push(attUpData.fileKey);
-          console.log(`Attachment uploaded to Kintone: ${att.name}`);
-        } else {
-          console.warn(`Attachment upload failed (non-fatal): ${attUpText.slice(0, 200)}`);
-        }
+      } catch (e: any) {
+        console.warn('[sync/demo] summary generation failed (non-fatal):', e?.message || e);
       }
 
-      // 3. Create Record on Kintone
-      const kintoneUrl = `https://${cleanDomain}/k/v1/record.json`;
-
-      // Build the record with the new dedicated fields.
-      const record: any = {
-        Title: { value: title || '音声入力データ' },
-        Date: { value: new Date(createdAt).toISOString().split('T')[0] },
-        [KFC.summary]:             { value: toKintoneHtml(summaryText) },
-        [KFC.transcriptRaw]:       { value: plainToKintoneHtml(text || '') },
-        [KFC.transcriptFormatted]: { value: toKintoneHtml(effectiveFormattedText || '') },
-        [KFC.transcriptTL]:        { value: plainToKintoneHtml(timedLinesToText(timedLines)) },
-      };
-      console.log(`[sync] field sizes — 原文=${(text || '').length}, 整形=${(effectiveFormattedText || '').length}, TL=${timedLinesToText(timedLines).length}, 要約=${(summaryText || '').length}`);
-      if (geminiResult && typeof geminiResult === 'string' && geminiResult.trim()) {
-        record[KFC.geminiResult] = { value: toKintoneHtml(geminiResult) };
-      }
-
-      // Set the lookup field so Kintone copies related fields from the customer DB
-      const cleanCustomerNumber = customerNumber ? String(customerNumber).trim() : '';
-      const cleanLookupFieldCode = lookupFieldCode ? String(lookupFieldCode).trim() : '';
-      if (cleanCustomerNumber && cleanLookupFieldCode) {
-        record[cleanLookupFieldCode] = { value: cleanCustomerNumber };
-        console.log(`Setting lookup field "${cleanLookupFieldCode}" = "${cleanCustomerNumber}"`);
-      }
-
-      // Separate 録音データ (audio only) and 添付ファイル (uploaded attachments only)
-      if (audioFileKey) {
-        record[KFC.audio] = { value: [{ fileKey: audioFileKey }] };
-      }
-      if (attachmentFileKeys.length > 0) {
-        record[KFC.attachments] = { value: attachmentFileKeys.map(fk => ({ fileKey: fk })) };
-      }
-
-      // 対応者 (user-select field) — Kintone login names are the tax-brain emails
-      const emails: string[] = Array.isArray(participantEmails)
-        ? participantEmails.filter((e: any) => typeof e === 'string' && e.includes('@'))
-        : [];
-      if (emails.length > 0) {
-        record[KFC.staffUsers] = { value: emails.map(code => ({ code })) };
-        console.log(`Setting ${KFC.staffUsers} = [${emails.join(', ')}]`);
-      }
-
-      // Backlink to this web app's history view — opens the same record card.
-      const origin = (typeof appOrigin === 'string' && /^https?:\/\//.test(appOrigin))
-        ? appOrigin.replace(/\/+$/, '')
-        : (process.env.APP_PUBLIC_URL || '').replace(/\/+$/, '');
-      if (origin && recordingId) {
-        record[KFC.backlink] = { value: `${origin}/?record=${encodeURIComponent(recordingId)}` };
-      }
-
-      // Legacy staff text field (backwards-compat with orgs that used it before 対応者)
-      const cleanStaffFieldCode = staffFieldCode ? String(staffFieldCode).trim() : '';
-      if (cleanStaffFieldCode && userDisplayName) {
-        record[cleanStaffFieldCode] = { value: String(userDisplayName) };
-        console.log(`Setting staff field "${cleanStaffFieldCode}" = "${userDisplayName}"`);
-      }
-
-      // Note: customerSubmitNo is retained on the client-side recording (for later filtering
-      // / display); it's not written directly since Kintone's customer lookup populates it.
-      if (customerSubmitNo) console.log(`(client-cached customerSubmitNo=${customerSubmitNo})`);
-
-      const payload = {
-        app: parseInt(appId, 10),
-        record
-      };
-
-      console.log(`Creating Kintone record at: ${kintoneUrl}`);
-      const kintoneRes = await fetch(kintoneUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Cybozu-API-Token': apiToken
-        },
-        body: JSON.stringify(payload)
+      // Mock CRM record identifiers — no external system is contacted.
+      const demoRecordId = `DEMO-${Date.now()}`;
+      res.json({
+        success: true,
+        demo: true,
+        summary: summaryText,
+        recordId: demoRecordId,
+        recordUrl: null,
       });
-
-      const kintoneText = await kintoneRes.text();
-      let kintoneData: any;
-      try {
-        kintoneData = JSON.parse(kintoneText);
-      } catch (jsonErr) {
-        kintoneData = null;
-      }
-
-      if (!kintoneRes.ok) {
-        const errMsg = kintoneData && kintoneData.message ? kintoneData.message : kintoneText.slice(0, 500);
-        throw new Error(`Kintone Record Creation Error (HTTP ${kintoneRes.status}): ${errMsg}`);
-      }
-
-      const recordId = kintoneData?.id ?? null;
-      const recordUrl = recordId
-        ? `https://${cleanDomain}/k/${appId}/show#record=${recordId}`
-        : null;
-
-      // Two-step lookup: update the lookup field via PUT after record creation.
-      // Kintone reliably triggers the lookup copy on PUT even if POST missed it.
-      if (recordId && cleanCustomerNumber && cleanLookupFieldCode) {
-        try {
-          console.log(`Triggering lookup via PUT: record ${recordId}, field "${cleanLookupFieldCode}" = "${cleanCustomerNumber}"`);
-          const putRes = await fetch(`https://${cleanDomain}/k/v1/record.json`, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Cybozu-API-Token': apiToken
-            },
-            body: JSON.stringify({
-              app: parseInt(appId, 10),
-              id: parseInt(recordId, 10),
-              record: {
-                [cleanLookupFieldCode]: { value: cleanCustomerNumber }
-              }
-            })
-          });
-          if (!putRes.ok) {
-            const putText = await putRes.text();
-            console.warn(`Lookup PUT update warning: ${putText}`);
-          } else {
-            console.log('Lookup PUT update succeeded.');
-          }
-        } catch (putErr: any) {
-          console.warn('Lookup PUT update error (non-fatal):', putErr.message);
-        }
-      }
-
-      res.json({ success: true, summary: summaryText, recordId, recordUrl });
     } catch (error: any) {
       console.error(error);
-      res.status(500).json({ error: error.message || 'Error communicating with Kintone' });
+      res.status(500).json({ error: error.message || 'CRM 送信処理でエラーが発生しました' });
     }
   });
 
+  // ── CRM customer lookup (public demo) ──────────────────────────────────────
+  // Returns a fixed list of fictional companies instead of querying any external
+  // CRM. The client can also type a company name directly.
   app.post('/api/kintone/customers', async (req, res) => {
-    const { domain, customerAppId, customerApiToken, keyword,
-            nameField = '顧客名', numberField = '顧客番号', submitField = 'submit_No' } = req.body;
-
-    if (!domain || !customerAppId || !customerApiToken) {
-      return res.status(400).json({ error: 'Missing Kintone configuration for customer lookup.' });
-    }
-
-    const cleanDomain = domain.trim().replace(/^(https?:\/\/)/i, '').replace(/\/+$/, '');
-
-    try {
-      validateAscii(customerApiToken, '顧客アプリのAPIトークン');
-      validateAscii(cleanDomain, 'サブドメイン');
-    } catch (err: any) {
-      return res.status(400).json({ error: err.message });
-    }
-
-    const kintoneUrl = `https://${cleanDomain}/k/v1/records.json`;
-
-    // Build the query to look up records
-    // Example: (顧客名 like "山田" or 顧客番号 like "山田") order by $id desc limit 50
-    let query = '';
-    const cleanNameField = nameField.trim() || '顧客名';
-    const cleanNumberField = numberField.trim() || '顧客番号';
-
-    if (keyword && keyword.trim().length > 0) {
-      const escapedKeyword = keyword.trim().replace(/"/g, '\\"');
-      query = `(${cleanNameField} like "${escapedKeyword}" or ${cleanNumberField} like "${escapedKeyword}") order by ${cleanNumberField} asc limit 50`;
-    } else {
-      query = `order by ${cleanNumberField} asc limit 50`;
-    }
-
-    try {
-      console.log(`Fetching Kintone customers from: ${kintoneUrl}?app=${customerAppId}&query=${query}`);
-      const response = await fetch(`${kintoneUrl}?app=${customerAppId}&query=${encodeURIComponent(query)}`, {
-        method: 'GET',
-        headers: {
-          'X-Cybozu-API-Token': customerApiToken
-        }
-      });
-
-      const text = await response.text();
-      let data: any;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        data = null;
-      }
-
-      if (!response.ok) {
-        const errMsg = data && data.message ? data.message : text.slice(0, 500);
-        throw new Error(`Kintone Customer Lookup Error (HTTP ${response.status}): ${errMsg}`);
-      }
-
-      const cleanSubmitField = (submitField || 'submit_No').trim();
-      const records = data.records || [];
-      const customers = records.map((rec: any) => {
-        return {
-          id: rec.$id?.value || '',
-          name: rec[cleanNameField]?.value || '',
-          number: rec[cleanNumberField]?.value || '',
-          submitNo: rec[cleanSubmitField]?.value || '',
-        };
-      });
-
-      res.json({ success: true, customers });
-    } catch (error: any) {
-      console.error(error);
-      res.status(500).json({ error: error.message || 'Error fetching customers from Kintone' });
-    }
+    const { keyword } = req.body || {};
+    const DEMO_CUSTOMERS = [
+      { id: '1',  name: '株式会社さくら商事',       number: 'C-1001', submitNo: 'S-1001' },
+      { id: '2',  name: '株式会社みらいテック',     number: 'C-1002', submitNo: 'S-1002' },
+      { id: '3',  name: '有限会社山田製作所',       number: 'C-1003', submitNo: 'S-1003' },
+      { id: '4',  name: '株式会社青空フーズ',       number: 'C-1004', submitNo: 'S-1004' },
+      { id: '5',  name: '株式会社ひまわり不動産',   number: 'C-1005', submitNo: 'S-1005' },
+      { id: '6',  name: '株式会社北斗ロジスティクス', number: 'C-1006', submitNo: 'S-1006' },
+      { id: '7',  name: '医療法人明和クリニック',   number: 'C-1007', submitNo: 'S-1007' },
+      { id: '8',  name: '株式会社大和デザイン',     number: 'C-1008', submitNo: 'S-1008' },
+      { id: '9',  name: '株式会社緑川建設',         number: 'C-1009', submitNo: 'S-1009' },
+      { id: '10', name: '株式会社星野トレーディング', number: 'C-1010', submitNo: 'S-1010' },
+    ];
+    const kw = (keyword || '').trim();
+    const customers = kw
+      ? DEMO_CUSTOMERS.filter(c => c.name.includes(kw) || c.number.includes(kw))
+      : DEMO_CUSTOMERS;
+    res.json({ success: true, customers });
   });
 
-  app.get('/api/kintone/default-settings', (req, res) => {
+  // ── CRM default settings (public demo) ─────────────────────────────────────
+  // Demo placeholders so the client treats CRM as "configured" and enables the
+  // send action. No real credentials are used anywhere.
+  app.get('/api/kintone/default-settings', (_req, res) => {
     res.json({
-      domain: process.env.KINTONE_DOMAIN || '',
-      appId: process.env.KINTONE_APP_ID || '',
-      apiToken: process.env.KINTONE_API_TOKEN || '',
-      customerAppId: process.env.KINTONE_CUSTOMER_APP_ID || '',
-      customerApiToken: process.env.KINTONE_CUSTOMER_API_TOKEN || '',
-      customerNameField: process.env.KINTONE_CUSTOMER_NAME_FIELD || '顧客名',
-      customerNumberField: process.env.KINTONE_CUSTOMER_NUMBER_FIELD || '顧客番号',
-      customerSubmitField: process.env.KINTONE_CUSTOMER_SUBMIT_FIELD || 'submit_No',
-      // The lookup source field on the RECORDING app (points to the customer
-      // DB). Setting a value here triggers Kintone's server-side lookup copy.
-      lookupFieldCode: process.env.KINTONE_LOOKUP_FIELD_CODE || '顧客DBより',
-      staffFieldCode: process.env.KINTONE_STAFF_FIELD_CODE || ''
+      domain: 'demo',
+      appId: '1',
+      apiToken: 'demo',
+      customerAppId: '1',
+      customerApiToken: 'demo',
+      customerNameField: '顧客名',
+      customerNumberField: '顧客番号',
+      customerSubmitField: 'submit_No',
+      lookupFieldCode: '顧客DBより',
+      staffFieldCode: '',
     });
   });
 
@@ -920,7 +666,7 @@ ${ocrSection}${fileListNote}${extra}
   const ASSISTANT_MODEL_CHAIN = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-001'];
 
   function createVertexAI(): GoogleGenAI {
-    const project = process.env.GOOGLE_CLOUD_PROJECT || 'recordingapp-500917';
+    const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
     const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
     return new GoogleGenAI({ vertexai: true, project, location });
   }
@@ -1118,7 +864,7 @@ ${context}
 提案するファイル名（拡張子なし）のみを1行で出力し、説明は不要です。`;
 
     try {
-      const ai = new GoogleGenAI({ vertexai: true, project: 'recordingapp-500917', location: 'asia-northeast1' });
+      const ai = new GoogleGenAI({ vertexai: true, project: 'it-kadai', location: 'asia-northeast1' });
       let resp: any;
       try {
         resp = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
@@ -1139,32 +885,10 @@ ${context}
   async function updateKintoneSummary(opts: {
     domain?: string; appId?: string; apiToken?: string; kintoneRecordId?: string; summary: string;
   }): Promise<boolean> {
-    const { domain, appId, apiToken, kintoneRecordId, summary } = opts;
-    if (!domain || !appId || !apiToken || !kintoneRecordId) return false;
-    const cleanDomain = domain.trim().replace(/^(https?:\/\/)/i, '').replace(/\/+$/, '');
-    try {
-      validateAscii(apiToken, 'APIトークン');
-      validateAscii(cleanDomain, 'サブドメイン');
-    } catch { return false; }
-    try {
-      const putRes = await fetch(`https://${cleanDomain}/k/v1/record.json`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-Cybozu-API-Token': apiToken },
-        body: JSON.stringify({
-          app: parseInt(appId, 10),
-          id: parseInt(kintoneRecordId, 10),
-          record: { [KFC.summary]: { value: toKintoneHtml(summary) } },
-        }),
-      });
-      if (!putRes.ok) {
-        console.warn(`[updateKintoneSummary] PUT failed: HTTP ${putRes.status}`, await putRes.text());
-        return false;
-      }
-      return true;
-    } catch (e: any) {
-      console.warn('[updateKintoneSummary] error:', e?.message || e);
-      return false;
-    }
+    // Public demo: external CRM integration is disabled. No PUT is sent; the
+    // caller treats a false result as "CRM not updated" (Firestore still saves).
+    void opts;
+    return false;
   }
 
   // Regenerate the AI summary with an extra user prompt, then update Kintone
@@ -1229,7 +953,7 @@ ${context}
         return res.status(400).json({ error: 'messages required' });
       }
 
-      const project = process.env.GOOGLE_CLOUD_PROJECT || 'recordingapp-500917';
+      const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
       const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
       const ai = new GoogleGenAI({ vertexai: true, project, location });
 

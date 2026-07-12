@@ -4,29 +4,26 @@ export interface MemberInfo {
   kana: string;   // katakana furigana — internal search keyword only, never displayed
 }
 
+// NOTE: All names/emails below are fictional, for the public demo only.
 export const TAX_BRAIN_MEMBERS_INFO: MemberInfo[] = [
-  { name: '原 寿基',     email: 'hara@tax-brain.page',       kana: 'ハラヒサキ' },
-  { name: '佐藤 孝明',   email: 'satou@tax-brain.page',      kana: 'サトウタカアキ' },
-  { name: '近藤 信二',   email: 'kondou@tax-brain.page',     kana: 'コンドウシンジ' },
-  { name: '牧野 香久美', email: 'makino@tax-brain.page',     kana: 'マキノカグミ' },
-  { name: '成田 さや香', email: 'narita@tax-brain.page',     kana: 'ナリタサヤカ' },
-  { name: '会田 大悟',   email: 'aida@tax-brain.page',       kana: 'アイダダイゴ' },
-  { name: '田澤 もえ子', email: 'tazawa@tax-brain.page',     kana: 'タザワモエコ' },
-  { name: '佐々木 数彌', email: 'kazuya@tax-brain.page',     kana: 'ササキカズヤ' },
-  { name: '池内 美穂',   email: 'ikeuchi@tax-brain.page',    kana: 'イケウチミホ' },
-  { name: '上野 恭平',   email: 'ueno@tax-brain.page',       kana: 'ウエノキョウヘイ' },
-  { name: '山本 和輝',   email: 'yamamoto@tax-brain.page',   kana: 'ヤマモトカズキ' },
-  { name: '岡部 瑠一',   email: 'okabe@tax-brain.page',      kana: 'オカベルイ' },
-  { name: '堀越 貴裕',   email: 'horikoshi@tax-brain.page',  kana: 'ホリコシタカヒロ' },
-  { name: '川下 千春',   email: 'kawashita@tax-brain.page',  kana: 'カワシタチハル' },
-  { name: '大村 葵',     email: 'aoi@tax-brain.page',        kana: 'オオムラアオイ' },
-  { name: '沢田 秀和',   email: 'sawada@tax-brain.page',     kana: 'サワダヒデカズ' },
-  { name: '大野 美緒',   email: 'oono@tax-brain.page',       kana: 'オオノミオ' },
-  { name: '村上 結子',   email: 'murakami@tax-brain.page',   kana: 'ムラカミユウコ' },
-  { name: '向井 香織',   email: 'mukai@tax-brain.page',      kana: 'ムカイカオリ' },
-  { name: '荒木 智香子', email: 'araki@tax-brain.page',      kana: 'アラキチカコ' },
-  { name: '髙栁 由美',   email: 'takayanagi@tax-brain.page', kana: 'タカヤナギユミ' },
-  { name: '池内 みどり', email: 'midori@tax-brain.page',     kana: 'イケウチミドリ' },
+  { name: '田中 太郎',   email: 'tanaka@tax-brain.page',    kana: 'タナカタロウ' },
+  { name: '鈴木 花子',   email: 'suzuki@tax-brain.page',    kana: 'スズキハナコ' },
+  { name: '高橋 健一',   email: 'takahashi@tax-brain.page', kana: 'タカハシケンイチ' },
+  { name: '渡辺 美咲',   email: 'watanabe@tax-brain.page',  kana: 'ワタナベミサキ' },
+  { name: '伊藤 大輔',   email: 'itou@tax-brain.page',      kana: 'イトウダイスケ' },
+  { name: '山田 由美',   email: 'yamada@tax-brain.page',    kana: 'ヤマダユミ' },
+  { name: '中村 翔太',   email: 'nakamura@tax-brain.page',  kana: 'ナカムラショウタ' },
+  { name: '小林 彩香',   email: 'kobayashi@tax-brain.page', kana: 'コバヤシアヤカ' },
+  { name: '加藤 直樹',   email: 'katou@tax-brain.page',     kana: 'カトウナオキ' },
+  { name: '吉田 恵子',   email: 'yoshida@tax-brain.page',   kana: 'ヨシダケイコ' },
+  { name: '松本 亮',     email: 'matsumoto@tax-brain.page', kana: 'マツモトリョウ' },
+  { name: '井上 真央',   email: 'inoue@tax-brain.page',     kana: 'イノウエマオ' },
+  { name: '木村 拓也',   email: 'kimura@tax-brain.page',    kana: 'キムラタクヤ' },
+  { name: '林 さやか',   email: 'hayashi@tax-brain.page',   kana: 'ハヤシサヤカ' },
+  { name: '清水 隆',     email: 'shimizu@tax-brain.page',   kana: 'シミズタカシ' },
+  // Map the demo sign-in account to a fictional display name so participant
+  // auto-selection still resolves for whoever is testing.
+  { name: '山下 一馬',   email: 'kazuya@tax-brain.page',    kana: 'ヤマシタカズマ' },
 ];
 
 export const TAX_BRAIN_MEMBERS: string[] = TAX_BRAIN_MEMBERS_INFO.map(m => m.name);

@@ -8,11 +8,11 @@ const sections = [
     items: [
       '「録音」タブをタップして録音画面を開きます',
       '赤い録音ボタンを押すと録音が開始されます',
-      '録音中に顧客番号を入力すると、Kintoneから顧問先情報を自動検索します',
+      '録音中に顧客番号を入力すると、CRMから顧問先情報を自動検索します',
       '「参加者を追加」から社内メンバーや社外参加者を選択できます',
       '添付ファイル（PDF・画像）をアップロードすると自動でOCR処理されます',
       '録音を停止すると、文字起こし・整形・AI要約が自動生成されます',
-      '完了後、Kintoneに自動で同期されます',
+      '完了後、CRMに自動で同期されます',
     ],
   },
   {
@@ -33,7 +33,7 @@ const sections = [
       '「履歴」タブで過去の録音を一覧表示します',
       'キーワード検索でタイトル・テキスト・要約を横断検索できます',
       '日付範囲フィルターで期間を絞り込めます',
-      '「未同期のみ」フィルターでKintone未同期の録音を表示できます',
+      '「未同期のみ」フィルターでCRM未同期の録音を表示できます',
       '各録音カードから要約の確認・編集・再生成が可能です',
     ],
   },
@@ -43,7 +43,7 @@ const sections = [
     items: [
       '録音完了時にGemini AIが自動で議事録を生成します',
       '履歴画面から「AI再生成」ボタンで要約を再生成できます（追加指示も可能）',
-      '「編集」ボタンで要約を手動編集し、Kintoneに反映できます',
+      '「編集」ボタンで要約を手動編集し、CRMに反映できます',
       '議題・内容/決定事項・宿題/アクション・次回予定・ファイル内容の5セクション構成です',
     ],
   },
@@ -93,7 +93,7 @@ export function HelpPage({ onViewChange }: { onViewChange: (v: ViewState) => voi
           </div>
           <div className="flex items-start gap-2">
             <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
-            <p>顧客番号を入力してKintoneと連携</p>
+            <p>顧客番号を入力してCRMと連携</p>
           </div>
           <div className="flex items-start gap-2">
             <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">3</span>
@@ -101,7 +101,7 @@ export function HelpPage({ onViewChange }: { onViewChange: (v: ViewState) => voi
           </div>
           <div className="flex items-start gap-2">
             <span className="bg-blue-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">4</span>
-            <p>録音停止 → 自動で文字起こし・AI要約・Kintone同期</p>
+            <p>録音停止 → 自動で文字起こし・AI要約・CRM同期</p>
           </div>
         </div>
       </div>
