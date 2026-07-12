@@ -1,0 +1,10 @@
+{
+  "name": "Cloud Recorder & Transcriber (Public Demo)",
+  "description": "A cross-device audio recording and transcription app with real-time syncing and an AI research assistant (Gemini). Public demo build without external business-system integrations.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

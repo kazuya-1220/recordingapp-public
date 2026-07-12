@@ -1,0 +1,14 @@
+node_modules/
+dist/
+uploads/
+nohup.out
+*.log
+
+# 環境変数（秘密鍵を含むためコミットしない）
+.env
+.env.local
+.env.*.local
+
+# 実プロジェクトの Firebase 設定（誤コミット防止。設定は .env で行う）
+firebase-applet-config.json
+service_account*.json

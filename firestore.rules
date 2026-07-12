@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidRecording(data) {
+      return data.keys().hasAll(['title', 'text', 'createdAt', 'userId']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.text is string && data.text.size() <= 100000 &&
+             data.createdAt is number &&
+             data.userId == request.auth.uid;
+    }
+
+    function isValidLiveSession(data) {
+      return data.keys().hasAll(['text', 'updatedAt', 'sessionId']) &&
+             data.text is string && data.text.size() <= 100000 &&
+             data.updatedAt is number &&
+             data.sessionId is string;
+    }
+
+    // Recordings: Only the owner can manage their data
+    match /recordings/{recordingId} {
+      allow read, delete: if isOwner(resource.data.userId);
+      allow create: if isSignedIn() && isValidRecording(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidRecording(request.resource.data);
+    }
+
+    // Live Sessions: Accessible by the 4-digit ID
+    // We allow read/write if the ID is known to support the "Simple Mobile to PC" flow
+    match /liveSessions/{sessionId} {
+      allow get: if true;
+      allow create, update: if isValidLiveSession(request.resource.data);
+      allow delete: if false;
+      allow list: if false;
+    }
+  }
+}

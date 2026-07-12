@@ -1,0 +1,44 @@
+{
+  "entities": {
+    "Recording": {
+      "title": "Recording",
+      "description": "A voice recording with transcription.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "The title of the recording." },
+        "text": { "type": "string", "description": "The transcribed text." },
+        "audioUrl": { "type": "string", "description": "URL to the audio file if saved elsewhere, or metadata." },
+        "createdAt": { "type": "integer", "description": "Timestamp of creation." },
+        "userId": { "type": "string", "description": "The user ID who owns this recording." },
+        "customerNumber": { "type": "string", "description": "Optional customer/reference number (manual input)." },
+        "customerName": { "type": "string", "description": "Optional customer name (manual input)." },
+        "participants": { "type": "array", "items": { "type": "string" }, "description": "Optional participant names list." },
+        "summary": { "type": "string", "description": "AI-generated summary and second actions." },
+        "geminiResult": { "type": "string", "description": "Gemini live-assistant research result." }
+      },
+      "required": ["title", "text", "createdAt", "userId"]
+    },
+    "LiveSession": {
+       "title": "LiveSession",
+       "description": "Temporary state for real-time transcription sync.",
+       "type": "object",
+       "properties": {
+         "text": { "type": "string" },
+         "isFinal": { "type": "boolean" },
+         "updatedAt": { "type": "integer" },
+         "sessionId": { "type": "string" }
+       },
+       "required": ["text", "updatedAt", "sessionId"]
+    }
+  },
+  "firestore": {
+    "/recordings/{recordingId}": {
+      "schema": "Recording",
+      "description": "Collection of saved recordings."
+    },
+    "/liveSessions/{sessionId}": {
+      "schema": "LiveSession",
+      "description": "Real-time sync sessions."
+    }
+  }
+}

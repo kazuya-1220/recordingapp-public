@@ -1,0 +1,92 @@
+name: Deploy to Cloud Run
+
+# 公開デモ用の汎用デプロイワークフロー。
+# プロジェクト固有の値はハードコードせず、GitHub の Variables / Secrets から読み込む。
+#   Repository Variables: GCP_PROJECT_ID, GCP_REGION, CLOUD_RUN_SERVICE
+#   Repository Secrets  : WIF_PROVIDER, WIF_SERVICE_ACCOUNT, GEMINI_API_KEY,
+#                         VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN,
+#                         VITE_FIREBASE_PROJECT_ID, VITE_FIREBASE_STORAGE_BUCKET,
+#                         VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_FIREBASE_APP_ID
+# 設定手順は SETUP.md を参照。
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Application
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_ALLOWED_EMAIL_DOMAIN: ${{ vars.ALLOWED_EMAIL_DOMAIN }}
+        run: npm run build
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      - name: Build & Push Docker Image
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${SERVICE_NAME}"
+          docker build -t "${IMAGE}:${{ github.sha }}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:latest"
+
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${SERVICE_NAME}"
+          gcloud run deploy "${SERVICE_NAME}" \
+            --image="${IMAGE}:${{ github.sha }}" \
+            --platform=managed \
+            --region="${REGION}" \
+            --allow-unauthenticated \
+            --port=3000 \
+            --memory=512Mi \
+            --cpu=1 \
+            --timeout=3600 \
+            --set-env-vars="NODE_ENV=production,GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
+
+      - name: Get Service URL
+        run: |
+          URL=$(gcloud run services describe "${SERVICE_NAME}" --region="${REGION}" --format='value(status.url)')
+          echo "✅ Deployment Successful!"
+          echo "🌍 Service URL: $URL"
+          echo "ℹ️ このURLのドメインを Firebase Console → Authentication → Settings →"
+          echo "   Authorized domains に追加してください（Googleサインインに必要）。"
