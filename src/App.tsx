@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Radio, RefreshCw, ArchiveRestore, Settings, AudioLines, MessageCircle, HelpCircle, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { auth, signInWithGoogle, getRedirectResult } from './lib/firebase';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { RecordingProvider, useRecording } from './contexts/RecordingContext';
@@ -115,14 +115,9 @@ function AppContent() {
     getRedirectResult(auth).catch(() => {});
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setSigningIn(false);
-      if (u && !u.email?.endsWith('@tax-brain.page')) {
-        await signOut(auth);
-        setLoginError('@tax-brain.page のアカウントのみ使用できます。');
-        setUser(null);
-      } else {
-        setUser(u);
-        if (u && !hasCompletedOnboarding()) setShowOnboarding(true);
-      }
+      // Public demo: any signed-in Google account is allowed.
+      setUser(u);
+      if (u && !hasCompletedOnboarding()) setShowOnboarding(true);
       setLoading(false);
     });
     return () => unsubscribe();

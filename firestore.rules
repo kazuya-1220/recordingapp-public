@@ -11,10 +11,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Public demo: any signed-in, email-verified Google account is allowed.
     function isTaxBrainUser() {
       return isSignedIn() &&
-             request.auth.token.email_verified == true &&
-             request.auth.token.email.matches('.*@tax-brain\\.page$');
+             request.auth.token.email_verified == true;
     }
 
     function isOwner(userId) {
