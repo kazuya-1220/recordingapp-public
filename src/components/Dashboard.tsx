@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { ViewState } from '../App';
 import { Recording } from '../types';
@@ -10,6 +10,7 @@ import {
   ChevronsUpDown, FileAudio, Sparkles, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { User as FirebaseUser } from 'firebase/auth';
+import { getKintoneSettings } from '../lib/kintone';
 
 const PAGE_SIZE = 30;
 
@@ -19,7 +20,11 @@ type SortDir = 'asc' | 'desc';
 export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewState) => void; user: FirebaseUser | null }) {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const [activeTab, setActiveTab] = useState<'all' | 'unsynced' | 'synced'>('all');
+  const [hasSetDefaultTab, setHasSetDefaultTab] = useState(false);
 
   // Search/Filter
   const [tempFreeWord, setTempFreeWord] = useState('');
@@ -56,8 +61,49 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
     return () => unsubscribe();
   }, [user]);
 
+  useEffect(() => {
+    if (!loading && recordings.length > 0 && !hasSetDefaultTab) {
+      setActiveTab(recordings.some(r => !r.kintoneSynced) ? 'unsynced' : 'all');
+      setHasSetDefaultTab(true);
+    }
+  }, [recordings, loading, hasSetDefaultTab]);
+
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [appliedFreeWord, appliedCustomerNo, appliedCustomerName, appliedSearchDate, sortField, sortDir]);
+  useEffect(() => { setPage(1); }, [appliedFreeWord, appliedCustomerNo, appliedCustomerName, appliedSearchDate, activeTab, sortField, sortDir]);
+
+  const handleKintoneSync = async (recording: Recording) => {
+    const settings = await getKintoneSettings();
+    if (!settings.domain || !settings.appId || !settings.apiToken) {
+      alert('Kintoneの設定が行われていません。設定画面からAPIトークンなどを登録してください。');
+      onViewChange('settings');
+      return;
+    }
+    setSyncingId(recording.id);
+    try {
+      const res = await fetch('/api/kintone/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...settings, ...recording })
+      });
+      const resText = await res.text();
+      let result: any;
+      try { result = JSON.parse(resText); } catch { result = null; }
+      if (!res.ok) throw new Error(result?.error || resText.slice(0, 500) || 'Unknown server error');
+      try {
+        await updateDoc(doc(db, 'recordings', recording.id), {
+          kintoneSynced: true,
+          summary: result?.summary || recording.summary || ''
+        });
+      } catch (e) {
+        handleFirestoreError(e, OperationType.UPDATE, `recordings/${recording.id}`);
+      }
+      alert('Kintoneへの連携とAI要約の保存が完了しました！');
+    } catch (e: any) {
+      alert('Kintone連携に失敗しました: ' + e.message);
+    } finally {
+      setSyncingId(null);
+    }
+  };
 
   const getLocalDateString = (timestamp: number) => {
     const d = new Date(timestamp);
@@ -107,6 +153,8 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
 
   // Filter
   const filteredRecordings = recordings.filter(rec => {
+    if (activeTab === 'unsynced' && rec.kintoneSynced) return false;
+    if (activeTab === 'synced' && !rec.kintoneSynced) return false;
     if (appliedFreeWord.trim()) {
       const kw = appliedFreeWord.toLowerCase();
       if (![rec.title, rec.text, rec.summary, rec.geminiResult].some(f => f?.toLowerCase().includes(kw))) return false;
@@ -157,12 +205,30 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
           )}
         </div>
 
+        {/* Tabs */}
+        <div className="flex border-b border-slate-200">
+          {(['all', 'unsynced', 'synced'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 text-center py-2 text-xs font-bold transition-all border-b-2 relative ${
+                activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              {tab === 'all' ? 'すべて' : tab === 'unsynced' ? 'Kintone未送信' : 'kintone送信済み'}
+              {tab === 'unsynced' && recordings.some(r => !r.kintoneSynced) && (
+                <span className="absolute top-2 right-1/4 w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+              )}
+            </button>
+          ))}
+        </div>
+
         {/* Filters */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4 shadow-xs">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {[
               { label: 'フリーワード検索', val: tempFreeWord, set: setTempFreeWord, ph: 'キーワード、要約内容...' },
-              { label: '整理番号検索', val: tempCustomerNo, set: setTempCustomerNo, ph: '整理番号...' },
+              { label: '顧問先番号検索', val: tempCustomerNo, set: setTempCustomerNo, ph: '顧問先番号...' },
               { label: '顧客名検索', val: tempCustomerName, set: setTempCustomerName, ph: '顧客名...' },
             ].map(({ label, val, set, ph }) => (
               <div key={label}>
@@ -260,7 +326,7 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
                       onClick={() => handleSortClick('customerName')}
                       className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-widest text-slate-500 cursor-pointer hover:text-slate-800 whitespace-nowrap select-none w-40"
                     >
-                      顧客名<SortIcon field="customerName" />
+                      顧問先名<SortIcon field="customerName" />
                     </th>
                     <th
                       onClick={() => handleSortClick('title')}
@@ -273,6 +339,9 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
                       className="text-left px-4 py-3 text-[11px] font-bold uppercase tracking-widest text-slate-500 cursor-pointer hover:text-slate-800 select-none hidden md:table-cell"
                     >
                       AI要約の概要<SortIcon field="summary" />
+                    </th>
+                    <th className="px-4 py-3 text-[11px] font-bold uppercase tracking-widest text-slate-500 whitespace-nowrap w-24">
+                      状態
                     </th>
                   </tr>
                 </thead>
@@ -313,12 +382,23 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
                             }
                           </div>
                         </td>
+                        <td className="px-4 py-3">
+                          {rec.kintoneSynced ? (
+                            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                              <CheckCircle2 className="w-3 h-3" />送信済み
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                              未送信
+                            </span>
+                          )}
+                        </td>
                       </tr>
 
                       {/* Expanded detail row */}
                       {expandedId === rec.id && (
                         <tr key={`${rec.id}-detail`} className="bg-blue-50/30">
-                          <td colSpan={4} className="px-4 py-5">
+                          <td colSpan={5} className="px-4 py-5">
                             <div className="space-y-4 max-w-4xl">
                               {/* Header info */}
                               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -331,6 +411,16 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
                                     )}
                                   </p>
                                 </div>
+                                {!rec.kintoneSynced && (
+                                  <button
+                                    onClick={e => { e.stopPropagation(); handleKintoneSync(rec); }}
+                                    disabled={syncingId === rec.id}
+                                    className="text-xs font-bold bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5"
+                                  >
+                                    {syncingId === rec.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Cloud className="w-3.5 h-3.5" />}
+                                    kintoneに送信
+                                  </button>
+                                )}
                               </div>
 
                               {/* 文字起こし */}
@@ -408,7 +498,8 @@ export function Dashboard({ onViewChange, user }: { onViewChange: (view: ViewSta
                   <ChevronLeft className="w-4 h-4" />
                 </button>
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let start = Math.max(1, safePage - 2);
+                  const half = 2;
+                  let start = Math.max(1, safePage - half);
                   let end = Math.min(totalPages, start + 4);
                   start = Math.max(1, end - 4);
                   const p = start + i;

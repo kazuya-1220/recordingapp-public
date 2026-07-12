@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Mic, Radio, Settings, FileAudio, ExternalLink, RefreshCw, ArchiveRestore, LogIn, LogOut, User, PanelBottomClose, PanelBottomOpen } from 'lucide-react';
 import { onAuthStateChanged, User as FirebaseUser, signOut } from 'firebase/auth';
-import { auth, signInWithGoogle, ALLOWED_EMAIL_DOMAIN } from './lib/firebase';
+import { auth, signInWithGoogle } from './lib/firebase';
 import { Dashboard } from './components/Dashboard';
 import { Recorder } from './components/Recorder';
 import { LiveView } from './components/LiveView';
@@ -14,22 +14,9 @@ export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [navCollapsed, setNavCollapsed] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
-      // 任意のドメイン制限（VITE_ALLOWED_EMAIL_DOMAIN が設定されている場合のみ有効）
-      if (u && ALLOWED_EMAIL_DOMAIN) {
-        const email = (u.email || '').toLowerCase();
-        if (!email.endsWith('@' + ALLOWED_EMAIL_DOMAIN.toLowerCase())) {
-          setAuthError(`このアプリは @${ALLOWED_EMAIL_DOMAIN} のアカウントのみ利用できます。`);
-          signOut(auth);
-          setUser(null);
-          setLoading(false);
-          return;
-        }
-      }
-      setAuthError(null);
       setUser(u);
       setLoading(false);
     });
@@ -57,7 +44,7 @@ export default function App() {
         </div>
         <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">レコーディングアプリ</h1>
         <p className="text-slate-500 mb-8 max-w-sm">
-          Securely record, transcribe, and sync your voice sessions across all your devices, with an AI research assistant.
+          Securely record, transcribe, and sync your voice sessions across all your devices and Kintone.
         </p>
         <button
           onClick={signInWithGoogle}
@@ -66,9 +53,6 @@ export default function App() {
           <LogIn className="w-5 h-5 text-blue-600" />
           Sign in with Google
         </button>
-        {authError && (
-          <p className="mt-4 text-sm text-red-600 font-semibold max-w-sm">{authError}</p>
-        )}
       </div>
     );
   }

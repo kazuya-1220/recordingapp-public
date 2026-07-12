@@ -6,7 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = 3000;
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
 if (!fs.existsSync(UPLOADS_DIR)) {
@@ -22,11 +22,10 @@ async function startServer() {
   app.use(express.json());
   app.use('/uploads', express.static(UPLOADS_DIR));
 
-  // 録音ファイルの受け取り（サーバローカルディスクに保存）
   app.post('/api/recordings', upload.single('audio'), (req, res) => {
     const file = req.file;
-    res.json({
-      audioUrl: file ? `/uploads/${file.filename}` : null
+    res.json({ 
+      audioUrl: file ? `/uploads/${file.filename}` : null 
     });
   });
 
@@ -53,43 +52,6 @@ async function startServer() {
     }
     throw lastError || new Error('All Gemini models failed');
   }
-
-  // AI要約とセカンドアクション（ToDo）を生成する
-  app.post('/api/summarize', async (req, res) => {
-    const { text } = req.body;
-    const ai = createGeminiClient();
-    if (!ai) {
-      return res.status(500).json({ error: 'GEMINI_API_KEY が設定されていません。' });
-    }
-    if (!text || String(text).trim().length === 0) {
-      return res.json({ summary: '（音声文字起こしデータがないため、要約を作成できませんでした）' });
-    }
-
-    const prompt = `あなたは優秀なアシスタントです。提供された音声文字起こしテキストから、次の2つのセクションを日本語で作成してください。
-
-1. 会話内容の要約（日本語で100文字程度、簡潔で見やすいまとめ）
-2. 今後の具体的なアクション（セカンドアクション）や何かしらのアクションが必要がある内容・ToDo事項
-
-出力フォーマットは以下のように、見出しをつけて分かりやすく作成してください：
-
-【要約】
-（ここに100文字程度の要約）
-
-【セカンドアクション】
-・（アクション項目1）
-・（アクション項目2）
-
-音声文字起こしテキスト：
-"${String(text)}"`;
-
-    try {
-      const response = await generateWithFallback(ai, { contents: prompt });
-      res.json({ summary: (response.text || '').trim() });
-    } catch (error: any) {
-      console.error('Summarize error:', error);
-      res.status(500).json({ error: error.message || '要約の生成に失敗しました。' });
-    }
-  });
 
   // ライブ同期アシスタント: 文字起こしから調査タスクを抽出
   app.post('/api/assistant/extract-task', async (req, res) => {
@@ -195,6 +157,297 @@ ${pastText}`;
       console.error('Assistant chat error:', error);
       res.status(500).json({ error: error.message || '回答の生成に失敗しました。' });
     }
+  });
+
+  function validateAscii(value: string, name: string): void {
+    if (!value) return;
+    for (let i = 0; i < value.length; i++) {
+      if (value.charCodeAt(i) > 255) {
+        throw new Error(`${name}に無効な文字（日本語などの全角文字）が含まれています。設定画面で正しい${name}（半角英数字）を入力してください。`);
+      }
+    }
+  }
+
+  function toRichText(plain: string): string {
+    if (!plain) return '';
+    return plain
+      .split('\n')
+      .map(line => `<p>${line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') || '&nbsp;'}</p>`)
+      .join('');
+  }
+
+  app.post('/api/kintone/sync', async (req, res) => {
+    const { domain, appId, apiToken, title, text, createdAt, audioUrl, customerNumber, customerName, participants, geminiResult } = req.body;
+    
+    if (!domain || !appId || !apiToken) {
+      return res.status(400).json({ error: 'Missing Kintone configuration.' });
+    }
+
+    const cleanDomain = domain.trim().replace(/^(https?:\/\/)/i, '').replace(/\/+$/, '');
+
+    try {
+      validateAscii(apiToken, 'APIトークン');
+      validateAscii(cleanDomain, 'サブドメイン');
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    try {
+      // 1. Generate Summary and Second Actions using Gemini AI
+      let summaryText = '';
+      try {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (apiKey && text && text.trim().length > 0) {
+          const ai = new GoogleGenAI({ apiKey });
+
+          console.log('Generating summary and second actions using gemini-3.5-flash...');
+          const prompt = `あなたは優秀なアシスタントです。提供された音声文字起こしテキストから、次の2つのセクションを日本語で作成してください。
+
+1. 会話内容の要約（日本語で100文字程度、簡潔で見やすいまとめ）
+2. 今後の具体的なアクション（セカンドアクション）や何かしらのアクションが必要がある内容・ToDo事項
+
+出力フォーマットは以下のように、見出しをつけて分かりやすく作成してください：
+
+【要約】
+（ここに100文字程度の要約）
+
+【セカンドアクション】
+・（アクション項目1）
+・（アクション項目2）
+
+音声文字起こしテキスト：
+"${text}"`;
+
+          let geminiResponse;
+          try {
+            console.log('Generating summary and second actions using gemini-3.5-flash...');
+            geminiResponse = await ai.models.generateContent({
+              model: 'gemini-3.5-flash',
+              contents: prompt
+            });
+          } catch (err: any) {
+            console.warn('gemini-3.5-flash failed or busy. Falling back to gemini-2.5-flash...', err);
+            try {
+              geminiResponse = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: prompt
+              });
+            } catch (err2: any) {
+              console.warn('gemini-2.5-flash failed or busy. Falling back to gemini-flash-latest...', err2);
+              geminiResponse = await ai.models.generateContent({
+                model: 'gemini-flash-latest',
+                contents: prompt
+              });
+            }
+          }
+
+          summaryText = geminiResponse.text || '';
+          console.log('Successfully generated AI summary.');
+        } else {
+          summaryText = '（音声文字起こしデータがないため、要約を作成できませんでした）';
+        }
+      } catch (geminiError: any) {
+        console.error('Gemini API Error:', geminiError);
+        summaryText = `（AI要約生成エラー: ${geminiError.message || '不明なエラー'}）`;
+      }
+
+      // 2. Upload Audio File to Kintone if present
+      let fileKey = null;
+      if (audioUrl) {
+        const filename = path.basename(audioUrl);
+        const filePath = path.join(process.cwd(), 'uploads', filename);
+
+        if (fs.existsSync(filePath)) {
+          const fileBuffer = fs.readFileSync(filePath);
+          const fileBlob = new Blob([fileBuffer], { type: 'audio/webm' });
+          
+          const uploadFormData = new FormData();
+          // Provide a standard filename for Kintone's attachments
+          uploadFormData.append('file', fileBlob, `recording_${Date.now()}.webm`);
+
+          const uploadUrl = `https://${cleanDomain}/k/v1/file.json`;
+          console.log(`Uploading file to Kintone: ${uploadUrl}`);
+          
+          const uploadRes = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+              'X-Cybozu-API-Token': apiToken
+            },
+            body: uploadFormData
+          });
+
+          const uploadText = await uploadRes.text();
+          let uploadData: any;
+          try {
+            uploadData = JSON.parse(uploadText);
+          } catch (jsonErr) {
+            uploadData = null;
+          }
+
+          if (!uploadRes.ok) {
+            const errMsg = uploadData && uploadData.message ? uploadData.message : uploadText.slice(0, 500);
+            throw new Error(`Kintone File Upload Error (HTTP ${uploadRes.status}): ${errMsg}`);
+          }
+
+          if (!uploadData || !uploadData.fileKey) {
+            throw new Error(`Kintone File Upload response was invalid: ${uploadText.slice(0, 500)}`);
+          }
+
+          fileKey = uploadData.fileKey;
+          console.log(`Successfully uploaded file, fileKey: ${fileKey}`);
+        } else {
+          console.warn(`File not found on server disk: ${filePath}`);
+        }
+      }
+
+      // 3. Create Record on Kintone
+      const kintoneUrl = `https://${cleanDomain}/k/v1/record.json`;
+      
+      let textWithMeta = text || '';
+      if (customerNumber || customerName || (participants && participants.length > 0)) {
+        const metaLines = [];
+        metaLines.push('【打ち合わせ基本情報】');
+        if (customerNumber) metaLines.push(`・顧客番号: ${customerNumber}`);
+        if (customerName) metaLines.push(`・顧客名: ${customerName}`);
+        if (participants && participants.length > 0) {
+          const pList = Array.isArray(participants) ? participants.join(', ') : participants;
+          metaLines.push(`・出席者: ${pList}`);
+        }
+        metaLines.push('---------------------------');
+        metaLines.push('');
+        textWithMeta = metaLines.join('\n') + textWithMeta;
+      }
+
+      const record: any = {
+        Title: { value: title || '音声入力データ' },
+        Text: { value: textWithMeta },
+        Date: { value: new Date(createdAt).toISOString().split('T')[0] },
+        "要約_セカンドアクション": { value: summaryText },
+        "Gemini生成結果": { value: toRichText(geminiResult || '') }
+      };
+
+      if (fileKey) {
+        record["添付ファイル"] = {
+          value: [
+            { fileKey: fileKey }
+          ]
+        };
+      }
+
+      const payload = {
+        app: parseInt(appId, 10),
+        record
+      };
+
+      console.log(`Creating Kintone record at: ${kintoneUrl}`);
+      const kintoneRes = await fetch(kintoneUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Cybozu-API-Token': apiToken
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const kintoneText = await kintoneRes.text();
+      let kintoneData: any;
+      try {
+        kintoneData = JSON.parse(kintoneText);
+      } catch (jsonErr) {
+        kintoneData = null;
+      }
+
+      if (!kintoneRes.ok) {
+        const errMsg = kintoneData && kintoneData.message ? kintoneData.message : kintoneText.slice(0, 500);
+        throw new Error(`Kintone Record Creation Error (HTTP ${kintoneRes.status}): ${errMsg}`);
+      }
+
+      res.json({ success: true, summary: summaryText });
+    } catch (error: any) {
+      console.error(error);
+      res.status(500).json({ error: error.message || 'Error communicating with Kintone' });
+    }
+  });
+
+  app.post('/api/kintone/customers', async (req, res) => {
+    const { domain, customerAppId, customerApiToken, keyword, nameField = '顧客名', numberField = '顧客番号' } = req.body;
+    
+    if (!domain || !customerAppId || !customerApiToken) {
+      return res.status(400).json({ error: 'Missing Kintone configuration for customer lookup.' });
+    }
+
+    const cleanDomain = domain.trim().replace(/^(https?:\/\/)/i, '').replace(/\/+$/, '');
+
+    try {
+      validateAscii(customerApiToken, '顧客アプリのAPIトークン');
+      validateAscii(cleanDomain, 'サブドメイン');
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    const kintoneUrl = `https://${cleanDomain}/k/v1/records.json`;
+
+    // Build the query to look up records
+    // Example: (顧客名 like "山田" or 顧客番号 like "山田") order by $id desc limit 50
+    let query = '';
+    const cleanNameField = nameField.trim() || '顧客名';
+    const cleanNumberField = numberField.trim() || '顧客番号';
+
+    if (keyword && keyword.trim().length > 0) {
+      const escapedKeyword = keyword.trim().replace(/"/g, '\\"');
+      query = `(${cleanNameField} like "${escapedKeyword}" or ${cleanNumberField} like "${escapedKeyword}") order by $id desc limit 50`;
+    } else {
+      query = 'order by $id desc limit 50';
+    }
+
+    try {
+      console.log(`Fetching Kintone customers from: ${kintoneUrl}?app=${customerAppId}&query=${query}`);
+      const response = await fetch(`${kintoneUrl}?app=${customerAppId}&query=${encodeURIComponent(query)}`, {
+        method: 'GET',
+        headers: {
+          'X-Cybozu-API-Token': customerApiToken
+        }
+      });
+
+      const text = await response.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        data = null;
+      }
+
+      if (!response.ok) {
+        const errMsg = data && data.message ? data.message : text.slice(0, 500);
+        throw new Error(`Kintone Customer Lookup Error (HTTP ${response.status}): ${errMsg}`);
+      }
+
+      const records = data.records || [];
+      const customers = records.map((rec: any) => {
+        return {
+          id: rec.$id?.value || '',
+          name: rec[cleanNameField]?.value || '',
+          number: rec[cleanNumberField]?.value || '',
+        };
+      });
+
+      res.json({ success: true, customers });
+    } catch (error: any) {
+      console.error(error);
+      res.status(500).json({ error: error.message || 'Error fetching customers from Kintone' });
+    }
+  });
+
+  app.get('/api/kintone/default-settings', (req, res) => {
+    res.json({
+      domain: process.env.KINTONE_DOMAIN || '',
+      appId: process.env.KINTONE_APP_ID || '',
+      apiToken: process.env.KINTONE_API_TOKEN || '',
+      customerAppId: process.env.KINTONE_CUSTOMER_APP_ID || '',
+      customerApiToken: process.env.KINTONE_CUSTOMER_API_TOKEN || '',
+      customerNameField: process.env.KINTONE_CUSTOMER_NAME_FIELD || '顧客名',
+      customerNumberField: process.env.KINTONE_CUSTOMER_NUMBER_FIELD || '顧客番号'
+    });
   });
 
   if (process.env.NODE_ENV !== "production") {

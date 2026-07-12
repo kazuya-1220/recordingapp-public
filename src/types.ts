@@ -4,11 +4,27 @@ export interface Recording {
   text: string;
   audioUrl: string | null;
   createdAt: number;
+  kintoneSynced: boolean;
   summary?: string;
   geminiResult?: string;
   customerNumber?: string;
   customerName?: string;
   participants?: string[];
+}
+
+export interface KintoneSettings {
+  domain: string;
+  appId: string;
+  apiToken: string;
+  customerAppId?: string;
+  customerApiToken?: string;
+  customerNameField?: string;
+  customerNumberField?: string;
+}
+
+export interface SyncResult {
+  success?: boolean;
+  error?: string;
 }
 
 export interface AssistantSettings {
