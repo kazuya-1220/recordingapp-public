@@ -1,14 +1,34 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, getRedirectResult } from 'firebase/auth';
+import { initializeFirestore, persistentLocalCache } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache(),
+  experimentalForceLongPolling: true,
+});
 export const googleProvider = new GoogleAuthProvider();
 
-export const signInWithGoogle = () => signInWithPopup(auth, googleProvider);
+export { getRedirectResult };
+
+export const signInWithGoogle = async () => {
+  try {
+    return await signInWithPopup(auth, googleProvider);
+  } catch (err: any) {
+    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+      // User dismissed the popup — treat as a no-op
+      return null;
+    }
+    if (err.code === 'auth/popup-blocked') {
+      // iOS Safari blocks popups by default. signInWithRedirect fails on iOS due to
+      // sessionStorage partitioning (ITP), so we surface a clear message instead.
+      throw new Error('POPUP_BLOCKED');
+    }
+    throw err;
+  }
+};
 
 export enum OperationType {
   CREATE = 'create',

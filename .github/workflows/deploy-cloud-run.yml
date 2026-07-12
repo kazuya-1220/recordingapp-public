@@ -1,31 +1,25 @@
 name: Deploy to Cloud Run
 
-# 公開デモ用の汎用デプロイワークフロー。
-# プロジェクト固有の値はハードコードせず、GitHub の Variables / Secrets から読み込む。
-#   Repository Variables: GCP_PROJECT_ID, GCP_REGION, CLOUD_RUN_SERVICE
-#   Repository Secrets  : WIF_PROVIDER, WIF_SERVICE_ACCOUNT, GEMINI_API_KEY,
-#                         VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN,
-#                         VITE_FIREBASE_PROJECT_ID, VITE_FIREBASE_STORAGE_BUCKET,
-#                         VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_FIREBASE_APP_ID
-# 設定手順は SETUP.md を参照。
-
 on:
   push:
     branches:
       - main
-  workflow_dispatch:
+      - claude/app-preview-editing-ux4ugq
+      - claude/repo-migration-transfer-kjozna
 
 env:
-  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-  REGION: ${{ vars.GCP_REGION }}
-  SERVICE_NAME: ${{ vars.CLOUD_RUN_SERVICE }}
+  PROJECT_ID: recordingapp-500917
+  REGION: asia-northeast1
+  SERVICE_NAME: recording-app
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       id-token: write
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -40,14 +34,6 @@ jobs:
         run: npm ci
 
       - name: Build Application
-        env:
-          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
-          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
-          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
-          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
-          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
-          VITE_ALLOWED_EMAIL_DOMAIN: ${{ vars.ALLOWED_EMAIL_DOMAIN }}
         run: npm run build
 
       - name: Authenticate to Google Cloud
@@ -60,33 +46,35 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
-
-      - name: Build & Push Docker Image
         run: |
-          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${SERVICE_NAME}"
-          docker build -t "${IMAGE}:${{ github.sha }}" -t "${IMAGE}:latest" .
-          docker push "${IMAGE}:${{ github.sha }}"
-          docker push "${IMAGE}:latest"
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:${{ github.sha }} .
+          docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:${{ github.sha }} ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:latest
+
+      - name: Push Docker Image
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:latest
 
       - name: Deploy to Cloud Run
         run: |
-          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${SERVICE_NAME}"
-          gcloud run deploy "${SERVICE_NAME}" \
-            --image="${IMAGE}:${{ github.sha }}" \
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-source-deploy/${{ env.SERVICE_NAME }}:${{ github.sha }} \
             --platform=managed \
-            --region="${REGION}" \
+            --region=${{ env.REGION }} \
             --allow-unauthenticated \
             --port=3000 \
             --memory=512Mi \
             --cpu=1 \
             --timeout=3600 \
-            --set-env-vars="NODE_ENV=production,GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
+            --set-env-vars=NODE_ENV=production,GOOGLE_CLOUD_PROJECT=${{ env.PROJECT_ID }},VERTEX_AI_LOCATION=${{ env.REGION }},KINTONE_DOMAIN=${{ secrets.KINTONE_DOMAIN }},KINTONE_APP_ID=${{ secrets.KINTONE_APP_ID }},KINTONE_API_TOKEN=${{ secrets.KINTONE_API_TOKEN }},KINTONE_CUSTOMER_APP_ID=${{ secrets.KINTONE_CUSTOMER_APP_ID }},KINTONE_CUSTOMER_API_TOKEN=${{ secrets.KINTONE_CUSTOMER_API_TOKEN }}
 
       - name: Get Service URL
         run: |
-          URL=$(gcloud run services describe "${SERVICE_NAME}" --region="${REGION}" --format='value(status.url)')
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} --region=${{ env.REGION }} --format='value(status.url)')
           echo "✅ Deployment Successful!"
           echo "🌍 Service URL: $URL"
-          echo "ℹ️ このURLのドメインを Firebase Console → Authentication → Settings →"
-          echo "   Authorized domains に追加してください（Googleサインインに必要）。"
+          echo "📱 Access from mobile: $URL"

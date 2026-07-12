@@ -1,0 +1,35 @@
+steps:
+  # Dockerイメージをビルド
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/recordingapp/recordingapp:$COMMIT_SHA'
+      - '-t'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/recordingapp/recordingapp:latest'
+      - '.'
+
+  # Artifact Registry へプッシュ
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/recordingapp/recordingapp'
+
+  # Cloud Run へデプロイ
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'recordingapp'
+      - '--image=asia-northeast1-docker.pkg.dev/$PROJECT_ID/recordingapp/recordingapp:$COMMIT_SHA'
+      - '--region=asia-northeast1'
+      - '--platform=managed'
+      - '--quiet'
+
+images:
+  - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/recordingapp/recordingapp'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

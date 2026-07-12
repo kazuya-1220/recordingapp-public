@@ -9,14 +9,13 @@
         "text": { "type": "string", "description": "The transcribed text." },
         "audioUrl": { "type": "string", "description": "URL to the audio file if saved elsewhere, or metadata." },
         "createdAt": { "type": "integer", "description": "Timestamp of creation." },
+        "kintoneSynced": { "type": "boolean", "description": "Whether it has been synced to Kintone." },
         "userId": { "type": "string", "description": "The user ID who owns this recording." },
-        "customerNumber": { "type": "string", "description": "Optional customer/reference number (manual input)." },
-        "customerName": { "type": "string", "description": "Optional customer name (manual input)." },
-        "participants": { "type": "array", "items": { "type": "string" }, "description": "Optional participant names list." },
-        "summary": { "type": "string", "description": "AI-generated summary and second actions." },
-        "geminiResult": { "type": "string", "description": "Gemini live-assistant research result." }
+        "customerNumber": { "type": "string", "description": "Optional customer number from lookup." },
+        "customerName": { "type": "string", "description": "Optional customer name from lookup." },
+        "participants": { "type": "array", "items": { "type": "string" }, "description": "Optional participant names list." }
       },
-      "required": ["title", "text", "createdAt", "userId"]
+      "required": ["title", "text", "createdAt", "kintoneSynced", "userId"]
     },
     "LiveSession": {
        "title": "LiveSession",

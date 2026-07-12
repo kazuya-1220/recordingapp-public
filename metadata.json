@@ -1,6 +1,6 @@
 {
-  "name": "Cloud Recorder & Transcriber (Public Demo)",
-  "description": "A cross-device audio recording and transcription app with real-time syncing and an AI research assistant (Gemini). Public demo build without external business-system integrations.",
+  "name": "Cloud Recorder & Transcriber",
+  "description": "A cross-device audio recording and transcription app with Kintone integration and real-time syncing.",
   "requestFramePermissions": [
     "microphone"
   ],
