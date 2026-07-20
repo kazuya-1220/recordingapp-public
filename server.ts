@@ -328,14 +328,39 @@ async function startServer() {
   // Transcribe endpoint: upload audio → Gemini speaker-labeled transcription
   app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     try {
-      if (!req.file) return res.status(400).json({ error: 'No audio file' });
+      // Two input modes:
+      //  1) multipart file field `audio` (through-server upload / fallback)
+      //  2) JSON { objectName } referencing audio already uploaded to GCS
+      //     (avoids re-sending the audio through Cloud Run's 32 MiB cap)
+      let audioBuffer: Buffer | null = null;
+      let mimeType = 'audio/webm';
+      let audioUrl: string | null = null;
+      if (req.file) {
+        audioBuffer = fs.readFileSync(req.file.path);
+        mimeType = req.file.mimetype || 'audio/webm';
+        uploadToGCS(req.file.path, req.file.filename).catch(() => {});
+        audioUrl = `/api/files/${req.file.filename}`;
+      } else if (req.body && typeof req.body.objectName === 'string' && req.body.objectName) {
+        const name = req.body.objectName;
+        if (name.includes('/') || name.includes('..')) {
+          return res.status(400).json({ error: 'Invalid objectName' });
+        }
+        audioBuffer = await getFileBuffer(name);
+        const ext = path.extname(name).toLowerCase();
+        mimeType = ext === '.m4a' || ext === '.mp4' ? 'audio/mp4'
+          : ext === '.ogg' ? 'audio/ogg'
+          : ext === '.wav' ? 'audio/wav'
+          : ext === '.mp3' ? 'audio/mpeg'
+          : 'audio/webm';
+        audioUrl = `/api/files/${name}`;
+      }
+      if (!audioBuffer) return res.status(400).json({ error: 'No audio file' });
 
       const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
       const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
       const ai = new GoogleGenAI({ vertexai: true, project, location });
 
-      const audioData = fs.readFileSync(req.file.path).toString('base64');
-      const mimeType = req.file.mimetype || 'audio/webm';
+      const audioData = audioBuffer.toString('base64');
 
       const prompt = `この音声を文字起こしし、話者ごとにラベルを付けて出力してください。
 出力形式（各発言を1行で）：
@@ -372,9 +397,6 @@ async function startServer() {
         const match = line.match(/^(話者\d+|Speaker\s*\d+)[：:]\s*(.+)/);
         if (match) transcript.push({ speaker: match[1], text: match[2].trim() });
       }
-
-      uploadToGCS(req.file.path, req.file.filename).catch(() => {});
-      const audioUrl = `/api/files/${req.file.filename}`;
 
       console.log(`[/api/transcribe] done: ${transcript.length} lines, audioUrl=${audioUrl}`);
       res.json({ audioUrl, transcript, rawText });

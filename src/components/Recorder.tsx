@@ -722,7 +722,45 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
       if (liveAttachments.length > 0) {
         formData.append('liveAttachments', JSON.stringify(liveAttachments));
       }
-      formData.append('text', text);
+
+      // Post-recording transcription: send the ACTUAL audio to Gemini for an
+      // accurate transcript. The live Web Speech text is unreliable (especially
+      // on iOS, where it fights MediaRecorder for the mic), so it serves only the
+      // live view and we replace it here. Falls back to the live text on failure.
+      let finalText = text;
+      let finalTimedLines = timedLines;
+      try {
+        let tr: Response;
+        if (audioObjectName) {
+          tr = await fetch('/api/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ objectName: audioObjectName }),
+          });
+        } else {
+          const tfd = new FormData();
+          tfd.append('audio', audioBlob, audioFilename);
+          tr = await fetch('/api/transcribe', { method: 'POST', body: tfd });
+        }
+        if (tr.ok) {
+          const td = await tr.json();
+          const raw = (td.rawText || '').trim();
+          if (raw) {
+            finalText = raw;
+            // Gemini emits no timestamps: spread the speaker lines evenly across
+            // the recording's approximate duration (last live marker) so the
+            // timeline ordering stays correct even though times are approximate.
+            const lines = raw.split('\n').map((l: string) => l.trim()).filter(Boolean);
+            const totalMs = timedLines.length ? timedLines[timedLines.length - 1].ms : 0;
+            finalTimedLines = lines.map((l: string, i: number) => ({
+              ms: lines.length > 1 ? Math.round((i / (lines.length - 1)) * totalMs) : 0,
+              text: l,
+            }));
+          }
+        }
+      } catch { /* keep live Web Speech text as fallback */ }
+
+      formData.append('text', finalText);
 
       const uploadRes = await fetch('/api/recordings', { method: 'POST', body: formData });
       const uploadResText = await uploadRes.text();
@@ -753,9 +791,9 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
       try {
         docRef = await addDoc(collection(db, 'recordings'), {
           title,
-          text,
+          text: finalText,
           formattedText: uploadedData.formattedText || null,
-          timedLines,
+          timedLines: finalTimedLines,
           audioUrl: uploadedData.audioUrl,
           createdAt: recordedAt,
           kintoneSynced: false,
@@ -787,9 +825,9 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
               ...settings,
               id: docRef.id,
               title,
-              text,
+              text: finalText,
               formattedText: uploadedData.formattedText || null,
-              timedLines,
+              timedLines: finalTimedLines,
               audioUrl: uploadedData.audioUrl,
               createdAt: recordedAt,
               customerNumber: selectedCustomer?.number || '',
