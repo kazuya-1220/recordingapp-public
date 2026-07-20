@@ -672,7 +672,34 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
 
       const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
       const formData = new FormData();
-      formData.append('audio', audioBlob, `recording-${recordedAt}.webm`);
+
+      // Large-file path: upload the audio DIRECTLY to GCS via a signed URL so it
+      // never passes through Cloud Run (whose 32 MiB request-body cap blocks long
+      // recordings, ~30+ min). If the signed-URL flow is unavailable (e.g. GCS
+      // not configured in local dev), fall back to the through-server upload.
+      let audioObjectName: string | null = null;
+      try {
+        const signRes = await fetch('/api/uploads/signed-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: `recording-${recordedAt}.webm`, contentType: 'audio/webm' }),
+        });
+        if (signRes.ok) {
+          const { uploadUrl, objectName, contentType } = await signRes.json();
+          const putRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': contentType || 'audio/webm' },
+            body: audioBlob,
+          });
+          if (putRes.ok) audioObjectName = objectName;
+        }
+      } catch { /* fall back to through-server upload below */ }
+
+      if (audioObjectName) {
+        formData.append('audioObjectName', audioObjectName);
+      } else {
+        formData.append('audio', audioBlob, `recording-${recordedAt}.webm`);
+      }
       attachmentItems.forEach(item => {
         formData.append('attachments', item.file, item.displayName || item.file.name);
       });

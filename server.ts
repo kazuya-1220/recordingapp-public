@@ -252,6 +252,31 @@ async function startServer() {
     return res.status(404).send('File not found');
   });
 
+  // Issue a v4 signed URL so the browser can upload large audio DIRECTLY to
+  // GCS, bypassing Cloud Run's 32 MiB request-body limit (which otherwise
+  // blocks long recordings — roughly 30+ minutes of webm/opus). The client
+  // PUTs the blob to `uploadUrl`, then passes `objectName` to /api/recordings.
+  app.post('/api/uploads/signed-url', async (req, res) => {
+    try {
+      if (!gcsStorage) return res.status(503).json({ error: 'GCS unavailable' });
+      const { filename, contentType } = req.body || {};
+      const rawExt = path.extname(typeof filename === 'string' ? filename : '').toLowerCase();
+      const safeExt = /^\.[a-z0-9]{1,5}$/.test(rawExt) ? rawExt : '.webm';
+      const objectName = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`;
+      const ct = typeof contentType === 'string' && contentType ? contentType : 'application/octet-stream';
+      const [uploadUrl] = await gcsStorage.bucket(GCS_BUCKET).file(objectName).getSignedUrl({
+        version: 'v4',
+        action: 'write',
+        expires: Date.now() + 15 * 60 * 1000,
+        contentType: ct,
+      });
+      res.json({ uploadUrl, objectName, fileUrl: `/api/files/${objectName}`, contentType: ct });
+    } catch (err: any) {
+      console.error('[/api/uploads/signed-url] ERROR:', err?.message || err);
+      res.status(500).json({ error: err?.message || 'Failed to create signed URL' });
+    }
+  });
+
   app.post('/api/recordings', upload.fields([
     { name: 'audio', maxCount: 1 },
     { name: 'attachments', maxCount: 10 }
@@ -263,8 +288,15 @@ async function startServer() {
 
       let audioUrl: string | null = null;
       if (audioFile) {
+        // Small-file / fallback path: audio came through the app server.
         uploadToGCS(audioFile.path, audioFile.filename).catch(() => {});
         audioUrl = `/api/files/${audioFile.filename}`;
+      } else if (typeof req.body.audioObjectName === 'string' && req.body.audioObjectName) {
+        // Large-file path: audio was uploaded directly to GCS via a signed URL.
+        const name = req.body.audioObjectName;
+        if (!name.includes('/') && !name.includes('..')) {
+          audioUrl = `/api/files/${name}`;
+        }
       }
 
       let attachmentsOcr: Array<{ ocrText: string | null }> = [];
