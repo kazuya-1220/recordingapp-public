@@ -329,23 +329,27 @@ async function startServer() {
   app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     try {
       // Two input modes:
-      //  1) multipart file field `audio` (through-server upload / fallback)
-      //  2) JSON { objectName } referencing audio already uploaded to GCS
-      //     (avoids re-sending the audio through Cloud Run's 32 MiB cap)
-      let audioBuffer: Buffer | null = null;
+      //  1) JSON { objectName } — audio already uploaded to GCS. We reference it
+      //     via a gs:// fileData URI so Vertex reads it DIRECTLY from GCS. This
+      //     has no ~20 MB inline-payload limit, so long recordings (30+ min)
+      //     transcribe fine. (In Vertex mode the Developer-API Files API is not
+      //     available; a gs:// URI is the equivalent.)
+      //  2) multipart file field `audio` — small / local-dev fallback. Sent
+      //     inline as base64 (fine below ~20 MB; also bounded by Cloud Run 32 MiB).
+      let audioPart: any = null;
       let mimeType = 'audio/webm';
       let audioUrl: string | null = null;
       if (req.file) {
-        audioBuffer = fs.readFileSync(req.file.path);
+        const buf = fs.readFileSync(req.file.path);
         mimeType = req.file.mimetype || 'audio/webm';
         uploadToGCS(req.file.path, req.file.filename).catch(() => {});
         audioUrl = `/api/files/${req.file.filename}`;
+        audioPart = { inlineData: { mimeType, data: buf.toString('base64') } };
       } else if (req.body && typeof req.body.objectName === 'string' && req.body.objectName) {
         const name = req.body.objectName;
         if (name.includes('/') || name.includes('..')) {
           return res.status(400).json({ error: 'Invalid objectName' });
         }
-        audioBuffer = await getFileBuffer(name);
         const ext = path.extname(name).toLowerCase();
         mimeType = ext === '.m4a' || ext === '.mp4' ? 'audio/mp4'
           : ext === '.ogg' ? 'audio/ogg'
@@ -353,14 +357,16 @@ async function startServer() {
           : ext === '.mp3' ? 'audio/mpeg'
           : 'audio/webm';
         audioUrl = `/api/files/${name}`;
+        if (!gcsStorage) return res.status(503).json({ error: 'GCS unavailable' });
+        const [exists] = await gcsStorage.bucket(GCS_BUCKET).file(name).exists();
+        if (!exists) return res.status(404).json({ error: 'Audio object not found' });
+        audioPart = { fileData: { fileUri: `gs://${GCS_BUCKET}/${name}`, mimeType } };
       }
-      if (!audioBuffer) return res.status(400).json({ error: 'No audio file' });
+      if (!audioPart) return res.status(400).json({ error: 'No audio file' });
 
       const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
       const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
       const ai = new GoogleGenAI({ vertexai: true, project, location });
-
-      const audioData = audioBuffer.toString('base64');
 
       const prompt = `この音声を文字起こしし、話者ごとにラベルを付けて出力してください。
 出力形式（各発言を1行で）：
@@ -381,7 +387,7 @@ async function startServer() {
             model,
             contents: [{ role: 'user', parts: [
               { text: prompt },
-              { inlineData: { mimeType, data: audioData } }
+              audioPart
             ]}]
           });
           rawText = result.text || '';
