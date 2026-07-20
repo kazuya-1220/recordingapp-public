@@ -252,6 +252,31 @@ async function startServer() {
     return res.status(404).send('File not found');
   });
 
+  // Issue a v4 signed URL so the browser can upload large audio DIRECTLY to
+  // GCS, bypassing Cloud Run's 32 MiB request-body limit (which otherwise
+  // blocks long recordings — roughly 30+ minutes of webm/opus). The client
+  // PUTs the blob to `uploadUrl`, then passes `objectName` to /api/recordings.
+  app.post('/api/uploads/signed-url', async (req, res) => {
+    try {
+      if (!gcsStorage) return res.status(503).json({ error: 'GCS unavailable' });
+      const { filename, contentType } = req.body || {};
+      const rawExt = path.extname(typeof filename === 'string' ? filename : '').toLowerCase();
+      const safeExt = /^\.[a-z0-9]{1,5}$/.test(rawExt) ? rawExt : '.webm';
+      const objectName = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`;
+      const ct = typeof contentType === 'string' && contentType ? contentType : 'application/octet-stream';
+      const [uploadUrl] = await gcsStorage.bucket(GCS_BUCKET).file(objectName).getSignedUrl({
+        version: 'v4',
+        action: 'write',
+        expires: Date.now() + 15 * 60 * 1000,
+        contentType: ct,
+      });
+      res.json({ uploadUrl, objectName, fileUrl: `/api/files/${objectName}`, contentType: ct });
+    } catch (err: any) {
+      console.error('[/api/uploads/signed-url] ERROR:', err?.message || err);
+      res.status(500).json({ error: err?.message || 'Failed to create signed URL' });
+    }
+  });
+
   app.post('/api/recordings', upload.fields([
     { name: 'audio', maxCount: 1 },
     { name: 'attachments', maxCount: 10 }
@@ -263,8 +288,15 @@ async function startServer() {
 
       let audioUrl: string | null = null;
       if (audioFile) {
+        // Small-file / fallback path: audio came through the app server.
         uploadToGCS(audioFile.path, audioFile.filename).catch(() => {});
         audioUrl = `/api/files/${audioFile.filename}`;
+      } else if (typeof req.body.audioObjectName === 'string' && req.body.audioObjectName) {
+        // Large-file path: audio was uploaded directly to GCS via a signed URL.
+        const name = req.body.audioObjectName;
+        if (!name.includes('/') && !name.includes('..')) {
+          audioUrl = `/api/files/${name}`;
+        }
       }
 
       let attachmentsOcr: Array<{ ocrText: string | null }> = [];
@@ -296,14 +328,45 @@ async function startServer() {
   // Transcribe endpoint: upload audio → Gemini speaker-labeled transcription
   app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     try {
-      if (!req.file) return res.status(400).json({ error: 'No audio file' });
+      // Two input modes:
+      //  1) JSON { objectName } — audio already uploaded to GCS. We reference it
+      //     via a gs:// fileData URI so Vertex reads it DIRECTLY from GCS. This
+      //     has no ~20 MB inline-payload limit, so long recordings (30+ min)
+      //     transcribe fine. (In Vertex mode the Developer-API Files API is not
+      //     available; a gs:// URI is the equivalent.)
+      //  2) multipart file field `audio` — small / local-dev fallback. Sent
+      //     inline as base64 (fine below ~20 MB; also bounded by Cloud Run 32 MiB).
+      let audioPart: any = null;
+      let mimeType = 'audio/webm';
+      let audioUrl: string | null = null;
+      if (req.file) {
+        const buf = fs.readFileSync(req.file.path);
+        mimeType = req.file.mimetype || 'audio/webm';
+        uploadToGCS(req.file.path, req.file.filename).catch(() => {});
+        audioUrl = `/api/files/${req.file.filename}`;
+        audioPart = { inlineData: { mimeType, data: buf.toString('base64') } };
+      } else if (req.body && typeof req.body.objectName === 'string' && req.body.objectName) {
+        const name = req.body.objectName;
+        if (name.includes('/') || name.includes('..')) {
+          return res.status(400).json({ error: 'Invalid objectName' });
+        }
+        const ext = path.extname(name).toLowerCase();
+        mimeType = ext === '.m4a' || ext === '.mp4' ? 'audio/mp4'
+          : ext === '.ogg' ? 'audio/ogg'
+          : ext === '.wav' ? 'audio/wav'
+          : ext === '.mp3' ? 'audio/mpeg'
+          : 'audio/webm';
+        audioUrl = `/api/files/${name}`;
+        if (!gcsStorage) return res.status(503).json({ error: 'GCS unavailable' });
+        const [exists] = await gcsStorage.bucket(GCS_BUCKET).file(name).exists();
+        if (!exists) return res.status(404).json({ error: 'Audio object not found' });
+        audioPart = { fileData: { fileUri: `gs://${GCS_BUCKET}/${name}`, mimeType } };
+      }
+      if (!audioPart) return res.status(400).json({ error: 'No audio file' });
 
       const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
       const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
       const ai = new GoogleGenAI({ vertexai: true, project, location });
-
-      const audioData = fs.readFileSync(req.file.path).toString('base64');
-      const mimeType = req.file.mimetype || 'audio/webm';
 
       const prompt = `この音声を文字起こしし、話者ごとにラベルを付けて出力してください。
 出力形式（各発言を1行で）：
@@ -324,7 +387,7 @@ async function startServer() {
             model,
             contents: [{ role: 'user', parts: [
               { text: prompt },
-              { inlineData: { mimeType, data: audioData } }
+              audioPart
             ]}]
           });
           rawText = result.text || '';
@@ -340,9 +403,6 @@ async function startServer() {
         const match = line.match(/^(話者\d+|Speaker\s*\d+)[：:]\s*(.+)/);
         if (match) transcript.push({ speaker: match[1], text: match[2].trim() });
       }
-
-      uploadToGCS(req.file.path, req.file.filename).catch(() => {});
-      const audioUrl = `/api/files/${req.file.filename}`;
 
       console.log(`[/api/transcribe] done: ${transcript.length} lines, audioUrl=${audioUrl}`);
       res.json({ audioUrl, transcript, rawText });
