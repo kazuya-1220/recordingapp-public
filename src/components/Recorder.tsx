@@ -123,7 +123,7 @@ interface AttachmentItem {
 }
 
 export function Recorder({ onViewChange, user, isActive = true }: { onViewChange: (view: ViewState) => void; user: FirebaseUser; isActive?: boolean }) {
-  const { isRecording, text, timedLines, sessionId, hasAudio, audioChunksRef, mediaStreamRef, startRecording, resumeRecording, stopRecording, resetRecording } = useRecording();
+  const { isRecording, text, timedLines, sessionId, hasAudio, audioChunksRef, audioMimeTypeRef, mediaStreamRef, startRecording, resumeRecording, stopRecording, resetRecording } = useRecording();
   // Canonical name of the current user within the Tax Brain member list (resolved by
   // email, not Google displayName), so "自分" and the member-list entry are the SAME
   // stored value — important for history search and the Kintone API.
@@ -670,7 +670,18 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
         ? `記録: ${selectedCustomer.name}様 (${new Date().toLocaleDateString('ja-JP')})`
         : `記録: ${new Date().toLocaleString('ja-JP')}`;
 
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      // Use the container the browser actually recorded (iOS = audio/mp4,
+      // Chrome = audio/webm). Saving iOS mp4 bytes under a .webm name with a
+      // webm Content-Type makes the file unplayable, so derive both from here.
+      const audioMime = (audioMimeTypeRef.current || 'audio/webm').split(';')[0];
+      const EXT_BY_MIME: Record<string, string> = {
+        'audio/webm': 'webm', 'audio/mp4': 'm4a', 'audio/ogg': 'ogg',
+        'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/aac': 'aac',
+      };
+      const audioExt = EXT_BY_MIME[audioMime] || 'webm';
+      const audioFilename = `recording-${recordedAt}.${audioExt}`;
+
+      const audioBlob = new Blob(audioChunksRef.current, { type: audioMime });
       const formData = new FormData();
 
       // Large-file path: upload the audio DIRECTLY to GCS via a signed URL so it
@@ -682,13 +693,13 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
         const signRes = await fetch('/api/uploads/signed-url', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: `recording-${recordedAt}.webm`, contentType: 'audio/webm' }),
+          body: JSON.stringify({ filename: audioFilename, contentType: audioMime }),
         });
         if (signRes.ok) {
           const { uploadUrl, objectName, contentType } = await signRes.json();
           const putRes = await fetch(uploadUrl, {
             method: 'PUT',
-            headers: { 'Content-Type': contentType || 'audio/webm' },
+            headers: { 'Content-Type': contentType || audioMime },
             body: audioBlob,
           });
           if (putRes.ok) audioObjectName = objectName;
@@ -698,7 +709,7 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
       if (audioObjectName) {
         formData.append('audioObjectName', audioObjectName);
       } else {
-        formData.append('audio', audioBlob, `recording-${recordedAt}.webm`);
+        formData.append('audio', audioBlob, audioFilename);
       }
       attachmentItems.forEach(item => {
         formData.append('attachments', item.file, item.displayName || item.file.name);

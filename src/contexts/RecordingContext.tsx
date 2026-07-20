@@ -10,6 +10,7 @@ interface RecordingContextType {
   sessionId: string;
   hasAudio: boolean;
   audioChunksRef: React.MutableRefObject<Blob[]>;
+  audioMimeTypeRef: React.MutableRefObject<string>;
   mediaStreamRef: React.MutableRefObject<MediaStream | null>;
   startRecording: () => Promise<void>;
   resumeRecording: () => Promise<void>;
@@ -29,6 +30,10 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  // Actual container/codec MediaRecorder produced (iOS Safari yields audio/mp4,
+  // Chrome yields audio/webm). Recorded so the saved file gets the correct
+  // extension + Content-Type — otherwise iOS mp4 saved as .webm won't play back.
+  const audioMimeTypeRef = useRef<string>('audio/webm');
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<any>(null);
   const sessionIdRef = useRef('');
@@ -118,8 +123,16 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     // NOTE: recordingStartTimeRef is set in startRecording only (not reset on resume)
 
     try {
-      const mediaRecorder = new MediaRecorder(stream);
+      // Pick a container MediaRecorder actually supports on this browser.
+      // iOS Safari rejects webm and falls back to mp4; Chrome prefers webm/opus.
+      const preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      const mt = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported
+        ? preferred.find(c => MediaRecorder.isTypeSupported(c)) || ''
+        : '';
+      const mediaRecorder = mt ? new MediaRecorder(stream, { mimeType: mt }) : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
+      // Record the type the browser really chose (may differ from `mt`).
+      audioMimeTypeRef.current = (mediaRecorder.mimeType || mt || 'audio/webm').split(';')[0];
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -281,7 +294,7 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <RecordingContext.Provider value={{
-      isRecording, text, timedLines, sessionId, hasAudio, audioChunksRef, mediaStreamRef,
+      isRecording, text, timedLines, sessionId, hasAudio, audioChunksRef, audioMimeTypeRef, mediaStreamRef,
       startRecording, resumeRecording, stopRecording, resetRecording, setText
     }}>
       {children}
