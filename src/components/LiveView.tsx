@@ -10,6 +10,9 @@ import { TAX_BRAIN_MEMBERS, memberMatchesQuery, getNameByEmail } from '../lib/me
 import { ScrollToTop } from './ScrollToTop';
 import { GeminiAssistant } from './GeminiAssistant';
 import { getAssistantSettings } from '../lib/assistant';
+import { LanguageMenu } from './LanguageMenu';
+import { TranscriptBody, TranscriptLangTabs } from './TranscriptBody';
+import { SOURCE_LANGUAGE, normalizeLanguages } from '../lib/languages';
 
 export function LiveView({ onViewChange, isActive = true }: { onViewChange: (view: ViewState) => void; isActive?: boolean }) {
   const [sessionId, setSessionId] = useState('');
@@ -18,6 +21,10 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
   const [timedLines, setTimedLines] = useState<TimedLine[]>([]);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [feedTab, setFeedTab] = useState<'tl' | 'raw'>('tl');
+  // 同時翻訳：会話言語（ja含む）と録音端末が生成した参考訳。liveSessions から購読する。
+  const [translationLanguages, setTranslationLanguages] = useState<string[]>([SOURCE_LANGUAGE]);
+  const [liveTranslations, setLiveTranslations] = useState<Record<string, string>>({});
+  const [transcriptLang, setTranscriptLang] = useState<string>(SOURCE_LANGUAGE);
   const [triggerWord] = useState(() => getAssistantSettings().triggerWord);
   const geminiSolveRef = React.useRef<(() => void) | null>(null);
   const [transcriptFullscreen, setTranscriptFullscreen] = useState(false);
@@ -147,12 +154,25 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
         } else if (data.customerName === '') {
           setSelectedCustomer(null);
         }
+        if (Array.isArray(data.translationLanguages)) {
+          setTranslationLanguages(normalizeLanguages(data.translationLanguages));
+        }
+        if (data.liveTranslations && typeof data.liveTranslations === 'object') {
+          setLiveTranslations(data.liveTranslations);
+        }
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `liveSessions/${sessionId}`);
     });
     return () => unsubscribe();
   }, [isJoined, sessionId]);
+
+  // 選択言語が変わり、表示中の言語が対象外になったら原文に戻す
+  useEffect(() => {
+    if (transcriptLang !== SOURCE_LANGUAGE && !translationLanguages.includes(transcriptLang)) {
+      setTranscriptLang(SOURCE_LANGUAGE);
+    }
+  }, [translationLanguages, transcriptLang]);
 
   const syncToFirestore = async (update: any) => {
     if (!sessionId) return;
@@ -355,6 +375,8 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
         if (data.customerName) {
           setSelectedCustomer({ name: data.customerName, number: data.customerNumber || '', submitNo: data.customerSubmitNo || '' });
         }
+        if (Array.isArray(data.translationLanguages)) setTranslationLanguages(normalizeLanguages(data.translationLanguages));
+        if (data.liveTranslations && typeof data.liveTranslations === 'object') setLiveTranslations(data.liveTranslations);
       } else {
         setLiveText('待機中...');
       }
@@ -442,6 +464,9 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
                 setLiveAttachments([]);
                 setRecorderAttachments([]);
                 setExpandedOcr(new Set());
+                setTranslationLanguages([SOURCE_LANGUAGE]);
+                setLiveTranslations({});
+                setTranscriptLang(SOURCE_LANGUAGE);
               }}
               className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-sm font-bold px-4 py-2 bg-red-500 hover:bg-red-600 active:scale-95 text-white rounded-lg transition-colors shadow-sm shrink-0"
             >
@@ -658,6 +683,17 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
                 );
               })()}
           </div>
+
+          {/* Translation language menu */}
+          <LanguageMenu
+            selected={translationLanguages}
+            accent="emerald"
+            onChange={(next) => {
+              const norm = normalizeLanguages(next);
+              setTranslationLanguages(norm);
+              syncToFirestore({ translationLanguages: norm });
+            }}
+          />
 
           {/* Attachments card */}
           <div className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5 space-y-3">
@@ -896,18 +932,21 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
           {/* RIGHT COLUMN: transcript */}
           <div className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm flex flex-col overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tight">文字起こし</h2>
-                <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
-                  <button type="button" onClick={() => setFeedTab('tl')}
-                    className={`px-4 py-1.5 text-xs font-bold transition-colors ${feedTab === 'tl' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
-                    TL
-                  </button>
-                  <button type="button" onClick={() => setFeedTab('raw')}
-                    className={`px-4 py-1.5 text-xs font-bold transition-colors border-l border-slate-200 dark:border-slate-600 ${feedTab === 'raw' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
-                    原文
-                  </button>
-                </div>
+                <TranscriptLangTabs languages={translationLanguages} activeLang={transcriptLang} onSelect={setTranscriptLang} accent="emerald" />
+                {transcriptLang === SOURCE_LANGUAGE && (
+                  <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
+                    <button type="button" onClick={() => setFeedTab('tl')}
+                      className={`px-4 py-1.5 text-xs font-bold transition-colors ${feedTab === 'tl' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
+                      TL
+                    </button>
+                    <button type="button" onClick={() => setFeedTab('raw')}
+                      className={`px-4 py-1.5 text-xs font-bold transition-colors border-l border-slate-200 dark:border-slate-600 ${feedTab === 'raw' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
+                      原文
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xl text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-widest flex items-center">
@@ -924,32 +963,15 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
               </div>
             </div>
             <div className="bg-white dark:bg-slate-800 p-6 min-h-[240px] max-h-[55vh] overflow-y-auto">
-              {liveText === '待機中...' ? (
-                <p className="text-slate-400 italic text-center mt-8 text-sm">録音開始を待機中...</p>
-              ) : feedTab === 'tl' ? (
-                timedLines.length > 0 ? (
-                  <div className="space-y-3">
-                    {timedLines.map((line, i) => (
-                      <div key={i} className="flex gap-2.5 items-start text-sm">
-                        <span className="text-[11px] text-blue-500 dark:text-blue-400 shrink-0 mt-0.5 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded tabular-nums">
-                          {String(Math.floor(line.ms / 60000)).padStart(2, '0')}:{String(Math.floor((line.ms % 60000) / 1000)).padStart(2, '0')}
-                        </span>
-                        <span className="text-slate-700 dark:text-slate-300 leading-relaxed">{line.text}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : liveText ? (
-                  <p className="text-slate-700 dark:text-slate-300 leading-relaxed font-sans text-sm">{liveText}</p>
-                ) : (
-                  <p className="text-slate-400 italic text-center mt-8 text-sm">文字起こしはまだありません。</p>
-                )
-              ) : (
-                liveText ? (
-                  <p className="text-slate-700 dark:text-slate-300 leading-relaxed text-sm whitespace-pre-wrap">{liveText}</p>
-                ) : (
-                  <p className="text-slate-400 italic text-center mt-8 text-sm">文字起こしはまだありません。</p>
-                )
-              )}
+              <TranscriptBody
+                activeLang={transcriptLang}
+                feedTab={feedTab}
+                timedLines={timedLines}
+                rawText={liveText}
+                translations={liveTranslations}
+                isWaiting={liveText === '待機中...'}
+                emptyLabel="文字起こしはまだありません。"
+              />
             </div>
           </div>
 
@@ -958,18 +980,21 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
             <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setTranscriptFullscreen(false)}>
               <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-[1344px] max-h-[92dvh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
                 <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800 shrink-0">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tight">文字起こし</h2>
-                    <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
-                      <button type="button" onClick={() => setFeedTab('tl')}
-                        className={`px-4 py-1.5 text-xs font-bold transition-colors ${feedTab === 'tl' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
-                        TL
-                      </button>
-                      <button type="button" onClick={() => setFeedTab('raw')}
-                        className={`px-4 py-1.5 text-xs font-bold transition-colors border-l border-slate-200 dark:border-slate-600 ${feedTab === 'raw' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
-                        原文
-                      </button>
-                    </div>
+                    <TranscriptLangTabs languages={translationLanguages} activeLang={transcriptLang} onSelect={setTranscriptLang} accent="emerald" />
+                    {transcriptLang === SOURCE_LANGUAGE && (
+                      <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
+                        <button type="button" onClick={() => setFeedTab('tl')}
+                          className={`px-4 py-1.5 text-xs font-bold transition-colors ${feedTab === 'tl' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
+                          TL
+                        </button>
+                        <button type="button" onClick={() => setFeedTab('raw')}
+                          className={`px-4 py-1.5 text-xs font-bold transition-colors border-l border-slate-200 dark:border-slate-600 ${feedTab === 'raw' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
+                          原文
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -980,32 +1005,15 @@ export function LiveView({ onViewChange, isActive = true }: { onViewChange: (vie
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6">
-                  {liveText === '待機中...' ? (
-                    <p className="text-slate-400 italic text-center mt-8 text-sm">録音開始を待機中...</p>
-                  ) : feedTab === 'tl' ? (
-                    timedLines.length > 0 ? (
-                      <div className="space-y-3">
-                        {timedLines.map((line, i) => (
-                          <div key={i} className="flex gap-2.5 items-start text-sm">
-                            <span className="text-[11px] text-blue-500 dark:text-blue-400 shrink-0 mt-0.5 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded tabular-nums">
-                              {String(Math.floor(line.ms / 60000)).padStart(2, '0')}:{String(Math.floor((line.ms % 60000) / 1000)).padStart(2, '0')}
-                            </span>
-                            <span className="text-slate-700 dark:text-slate-300 leading-relaxed">{line.text}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : liveText ? (
-                      <p className="text-slate-700 dark:text-slate-300 leading-relaxed font-sans text-sm">{liveText}</p>
-                    ) : (
-                      <p className="text-slate-400 italic text-center mt-8 text-sm">文字起こしはまだありません。</p>
-                    )
-                  ) : (
-                    liveText ? (
-                      <p className="text-slate-700 dark:text-slate-300 leading-relaxed text-sm whitespace-pre-wrap">{liveText}</p>
-                    ) : (
-                      <p className="text-slate-400 italic text-center mt-8 text-sm">文字起こしはまだありません。</p>
-                    )
-                  )}
+                  <TranscriptBody
+                    activeLang={transcriptLang}
+                    feedTab={feedTab}
+                    timedLines={timedLines}
+                    rawText={liveText}
+                    translations={liveTranslations}
+                    isWaiting={liveText === '待機中...'}
+                    emptyLabel="文字起こしはまだありません。"
+                  />
                 </div>
               </div>
             </div>

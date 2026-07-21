@@ -10,6 +10,14 @@ import { User as FirebaseUser } from 'firebase/auth';
 import { getKintoneSettings } from '../lib/kintone';
 import { TAX_BRAIN_MEMBERS, getEmailByName } from '../lib/members';
 import { AttachmentPreviewModal, downloadAttachment, openAttachmentInPlace } from './AttachmentPreviewModal';
+import { SOURCE_LANGUAGE, languageLabel } from '../lib/languages';
+import { Languages } from 'lucide-react';
+
+// 履歴の翻訳表示で使う：この記録が持つ翻訳言語コード一覧（訳文が存在するもの）
+function availableTranslations(rec: Recording): string[] {
+  const map = rec.translations || {};
+  return Object.keys(map).filter(code => code !== SOURCE_LANGUAGE && (map[code] || '').trim());
+}
 
 function highlightText(text: string, kw1?: string | null, kw2?: string | null): React.ReactNode {
   const kw = kw1?.trim() || kw2?.trim();
@@ -36,6 +44,8 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
   const [expandedAttachments, setExpandedAttachments] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const [textTabs, setTextTabs] = useState<Record<string, 'raw' | 'formatted' | 'timeline'>>({});
+  // 履歴の文字起こしで表示中の言語（レコードID→言語コード）。未設定＝原文(ja)。
+  const [transcriptLangs, setTranscriptLangs] = useState<Record<string, string>>({});
   const [transcriptPopup, setTranscriptPopup] = useState<string | null>(null);
   const [popupFontSize, setPopupFontSize] = useState(14);
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -52,6 +62,36 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
     if (textTabs[rec.id]) return textTabs[rec.id];
     if (rec.formattedText) return 'formatted';
     return 'raw';
+  };
+
+  const getLang = (rec: Recording): string => transcriptLangs[rec.id] || SOURCE_LANGUAGE;
+  const setLang = (id: string, code: string) => setTranscriptLangs(prev => ({ ...prev, [id]: code }));
+
+  // 言語切替タブ（原文＋翻訳言語）。翻訳が無い記録では何も出さない。
+  const renderLangTabs = (rec: Recording) => {
+    const langs = availableTranslations(rec);
+    if (langs.length === 0) return null;
+    const active = getLang(rec);
+    const tabs = [SOURCE_LANGUAGE, ...langs];
+    return (
+      <div className="flex items-center gap-1 flex-wrap">
+        <Languages className="w-3.5 h-3.5 text-slate-400 mr-0.5" />
+        {tabs.map(code => (
+          <button
+            key={code}
+            type="button"
+            onClick={() => setLang(rec.id, code)}
+            className={`px-2.5 py-1 text-[11px] font-bold rounded-md border transition-colors ${
+              active === code
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-600 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+            }`}
+          >
+            {code === SOURCE_LANGUAGE ? '原文(日本語)' : languageLabel(code)}
+          </button>
+        ))}
+      </div>
+    );
   };
 
   // Deep-linked focus: scroll + flash on first render once the target record loads
@@ -1201,7 +1241,15 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
                       )}
                     </div>
                   </div>
-                  {getActiveTab(rec) === 'timeline' && (rec.timedLines?.length ?? 0) > 0 ? (
+                  {availableTranslations(rec).length > 0 && (
+                    <div className="mb-2">{renderLangTabs(rec)}</div>
+                  )}
+                  {getLang(rec) !== SOURCE_LANGUAGE ? (
+                    <div className="max-h-56 overflow-y-auto whitespace-pre-wrap text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                      <p className="text-[11px] font-bold text-indigo-500 dark:text-indigo-400 uppercase tracking-wider mb-1">{languageLabel(getLang(rec))}（AI翻訳）</p>
+                      {(rec.translations?.[getLang(rec)] || '').trim() || <span className="text-slate-400 italic">この言語の翻訳はありません</span>}
+                    </div>
+                  ) : getActiveTab(rec) === 'timeline' && (rec.timedLines?.length ?? 0) > 0 ? (
                     <div className="max-h-56 overflow-y-auto space-y-2">
                       {rec.timedLines!.map((line, i) => (
                         <div key={i} className="flex gap-2.5 items-start text-sm">
@@ -1360,7 +1408,15 @@ export function Dashboard({ onViewChange, user, onUnsyncedChange, focusRecordId 
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-5 md:p-7">
-                {activeTab === 'timeline' && (rec.timedLines?.length ?? 0) > 0 ? (
+                {availableTranslations(rec).length > 0 && (
+                  <div className="mb-3">{renderLangTabs(rec)}</div>
+                )}
+                {getLang(rec) !== SOURCE_LANGUAGE ? (
+                  <div className="whitespace-pre-wrap text-slate-600 dark:text-slate-300 leading-relaxed" style={{ fontSize: `${popupFontSize}px` }}>
+                    <p className="text-xs font-bold text-indigo-500 dark:text-indigo-400 uppercase tracking-wider mb-2">{languageLabel(getLang(rec))}（AI翻訳）</p>
+                    {(rec.translations?.[getLang(rec)] || '').trim() || <span className="text-slate-400 italic">この言語の翻訳はありません</span>}
+                  </div>
+                ) : activeTab === 'timeline' && (rec.timedLines?.length ?? 0) > 0 ? (
                   <div className="space-y-2" style={{ fontSize: `${popupFontSize}px` }}>
                     {rec.timedLines!.map((line, i) => (
                       <div key={i} className="flex gap-2.5 items-start">

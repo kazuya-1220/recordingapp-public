@@ -6,6 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
+import { LANGUAGES, getLanguage } from './src/lib/languages';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
@@ -412,6 +413,25 @@ async function startServer() {
     }
   });
 
+  // Translate endpoint: 日本語の文字起こしを複数の対象言語へまとめて翻訳する。
+  //  - 録音中のライブ翻訳（参考・やや遅行OK）と、録音後の確定翻訳の両方から呼ばれる。
+  //  - targets は言語コード配列（例 ['en','zh-CN']）。ja はソースなので無視。
+  //  - 音声認識で一部壊れた文でも、前後の文脈から意図を推定して自然に訳すよう指示。
+  app.post('/api/translate', async (req, res) => {
+    try {
+      const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      const rawTargets: string[] = Array.isArray(req.body?.targets) ? req.body.targets : [];
+      const targets = rawTargets.filter((c) => c && c !== 'ja' && !!getLanguage(c));
+      if (!text) return res.json({ translations: {} });
+      if (targets.length === 0) return res.json({ translations: {} });
+      const translations = await translateToLanguages(text, targets);
+      res.json({ translations });
+    } catch (err: any) {
+      console.error('[/api/translate] ERROR:', err?.message || err);
+      res.status(500).json({ error: err?.message || 'Internal server error' });
+    }
+  });
+
   // OCR endpoint: call Gemini Vision on uploaded files, return text per file
   app.post('/api/ocr', upload.fields([{ name: 'files', maxCount: 10 }]), async (req, res) => {
     const files = (req.files as { [k: string]: Express.Multer.File[] })?.['files'] || [];
@@ -489,6 +509,70 @@ async function startServer() {
     audio:               process.env.KINTONE_AUDIO_FIELD                || '録音データ',
     attachments:         process.env.KINTONE_ATTACHMENT_FIELD           || '添付ファイル',
   };
+
+  // 日本語テキストを複数の対象言語へ1回の Gemini 呼び出しでまとめて翻訳する。
+  // 出力は言語ごとの ===LANG:code=== ブロックで受け取り、堅牢にパースする。
+  // 音声認識で壊れた文は前後の文脈から意図を推定させ、逐語訳ではなく自然な訳にする。
+  async function translateToLanguages(
+    text: string, targets: string[]
+  ): Promise<Record<string, string>> {
+    const result: Record<string, string> = {};
+    const defs = targets.map(getLanguage).filter((d): d is typeof LANGUAGES[number] => !!d);
+    if (!text.trim() || defs.length === 0) return result;
+
+    const project = process.env.GOOGLE_CLOUD_PROJECT || 'it-kadai';
+    const location = process.env.VERTEX_AI_LOCATION || 'asia-northeast1';
+    const ai = new GoogleGenAI({ vertexai: true, project, location });
+
+    const langList = defs.map(d => `- ${d.code}: ${d.gemini}`).join('\n');
+    const blockFormat = defs.map(d => `===LANG:${d.code}===\n（${d.gemini} translation here）`).join('\n');
+    const prompt = `あなたはプロの会議通訳者です。以下の日本語の会話文字起こしを、指定された各言語へ翻訳してください。
+
+翻訳ルール：
+・文字起こしは音声認識のため、一部の語句や文が壊れている・欠けている場合があります。前後の文脈から話者の本来の意図を推定し、意味の通る自然な文章に補って翻訳してください。
+・逐語訳ではなく、その言語の文法・語順に沿った自然な表現にしてください。
+・専門用語（税務・会計・法律など）は各言語で一般的な訳語を用いてください。
+・話者ラベル（例「話者1:」）がある場合はそのまま各言語に残してください。
+・原文にない情報を創作しないでください。聞き取り不能な部分は各言語で自然に「(inaudible)」相当の表現にしてください。
+
+対象言語：
+${langList}
+
+出力形式（各言語ブロックを厳密に下記の形式で。前置き・説明・コードブロックは一切付けない）：
+${blockFormat}
+
+【日本語原文】
+${text}`;
+
+    let rawOut = '';
+    for (const model of ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-001']) {
+      try {
+        const r = await ai.models.generateContent({ model, contents: prompt });
+        rawOut = r.text || '';
+        if (rawOut) break;
+      } catch (err: any) {
+        if (model === 'gemini-2.0-flash-001') throw err;
+        console.warn(`[translateToLanguages] ${model} failed, falling back:`, err?.message || err);
+      }
+    }
+
+    // ===LANG:code=== ブロックを分割してパース。次のマーカーまでが当該言語の訳文。
+    const markerRe = /===LANG:([A-Za-z-]+)===/g;
+    const matches = [...rawOut.matchAll(markerRe)];
+    if (matches.length === 0) {
+      // マーカーが出なかった場合：対象が1言語なら全文をその訳とみなす（保険）。
+      if (defs.length === 1) result[defs[0].code] = rawOut.trim();
+      return result;
+    }
+    for (let i = 0; i < matches.length; i++) {
+      const code = matches[i][1];
+      const start = matches[i].index! + matches[i][0].length;
+      const end = i + 1 < matches.length ? matches[i + 1].index! : rawOut.length;
+      const body = rawOut.slice(start, end).trim();
+      if (defs.some(d => d.code === code) && body) result[code] = body;
+    }
+    return result;
+  }
 
   // Generate a cleaned/formatted version of a raw transcript. Falls back
   // through the gemini-2.5 → 2.0 → 2.0-001 chain (like the summary helper)

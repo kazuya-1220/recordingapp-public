@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Radio, RefreshCw, ArchiveRestore, Settings, AudioLines, MessageCircle, HelpCircle, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { auth, signInWithGoogle, getRedirectResult } from './lib/firebase';
+import { auth, signInDemoAnonymously, getRedirectResult } from './lib/firebase';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { RecordingProvider, useRecording } from './contexts/RecordingContext';
 import { Dashboard } from './components/Dashboard';
@@ -50,6 +50,9 @@ function AppContent() {
   const [loading, setLoading] = useState(true);
   const [signingIn, setSigningIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  // 課題（デモ）用：実際のGoogleログインは行わない。ボタン押下で説明ポップアップを表示し、
+  // 「利用を開始」で匿名ログインしてアプリに入る。
+  const [showDemoLoginNote, setShowDemoLoginNote] = useState(false);
   const [hasUnsynced, setHasUnsynced] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [feedbackPopupOpen, setFeedbackPopupOpen] = useState(false);
@@ -123,24 +126,24 @@ function AppContent() {
     return () => unsubscribe();
   }, []);
 
-  const handleSignIn = async () => {
+  // 「Googleでログイン」ボタン：実際の認証は行わず、説明ポップアップを開くだけ。
+  const handleSignIn = () => {
+    setLoginError(null);
+    setShowDemoLoginNote(true);
+  };
+
+  // ポップアップの「利用を開始する」：匿名ログインしてアプリに入る（Googleアカウント不要）。
+  const handleStartDemo = async () => {
+    setShowDemoLoginNote(false);
     setLoginError(null);
     setSigningIn(true);
     try {
-      const result = await signInWithGoogle();
-      if (!result) {
-        // User dismissed the popup — no error, just stop the spinner
-        setSigningIn(false);
-      }
-      // On success, onAuthStateChanged will fire and clear signingIn
+      await signInDemoAnonymously();
+      // 成功時は onAuthStateChanged が発火して signingIn を解除する
     } catch (err: any) {
       setSigningIn(false);
-      console.error('Login error:', err);
-      if (err.message === 'POPUP_BLOCKED') {
-        setLoginError('ポップアップがブロックされています。Safariの場合は「設定 → Safari → ポップアップをブロック」をオフにするか、Chromeでお試しください。');
-      } else {
-        setLoginError('ログインに失敗しました。再試行してください。');
-      }
+      console.error('Demo login error:', err);
+      setLoginError('利用開始に失敗しました。Firebaseの「匿名ログイン」が有効か確認してください。');
     }
   };
 
@@ -148,7 +151,7 @@ function AppContent() {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col items-center justify-center gap-3">
         <RefreshCw className="w-8 h-8 text-blue-600 animate-spin" />
-        {signingIn && <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Googleでログイン中...</p>}
+        {signingIn && <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">利用の準備中...</p>}
       </div>
     );
   }
@@ -171,8 +174,51 @@ function AppContent() {
           <GoogleIcon />
           Googleでログイン
         </button>
+        <p className="mt-3 text-xs text-slate-400 dark:text-slate-500 max-w-sm">
+          ※本アプリは課題・デモ用です。実際のGoogleログインは行いません。
+        </p>
         {loginError && (
           <p className="mt-4 text-sm text-red-500">{loginError}</p>
+        )}
+
+        {/* デモ用ログイン説明ポップアップ（実際の認証は行わない旨） */}
+        {showDemoLoginNote && (
+          <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setShowDemoLoginNote(false)}>
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden text-left" onClick={e => e.stopPropagation()}>
+              <div className="p-6 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-full bg-blue-50 dark:bg-blue-900/40 flex items-center justify-center shrink-0">
+                    <GoogleIcon />
+                  </div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">ログインについて</h2>
+                </div>
+                <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                  本アプリでは、セキュリティ機能として Google アカウントによるログインを用意しています。
+                  ただし、本デモは<strong>課題用</strong>のため、実際の Google ログインは行いません。
+                </p>
+                <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                  下のボタンから、ログインせずにそのままアプリをご利用いただけます
+                  （データは端末ごとの一時的な利用者として保存されます）。
+                </p>
+                <div className="flex flex-col gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleStartDemo}
+                    className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold py-3 px-6 rounded-xl transition-all duration-150"
+                  >
+                    ログインせずに利用を開始する
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDemoLoginNote(false)}
+                    className="w-full flex items-center justify-center gap-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold py-3 px-6 rounded-xl transition-colors active:scale-95 duration-150"
+                  >
+                    閉じる
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     );

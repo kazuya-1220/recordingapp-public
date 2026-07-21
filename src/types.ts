@@ -37,6 +37,11 @@ export interface Recording {
   kintoneRecordId?: string;              // for later PUTs (regen/edit)
   attachments?: AttachmentInfo[];
   summaryUpdateLog?: UpdateLogEntry[];   // audit trail for AI-summary edits
+  // ── 同時翻訳（多言語）────────────────────────────────────────────────
+  sourceLanguage?: string;               // 文字起こしの基準言語（通常 'ja'）
+  translationLanguages?: string[];       // この記録で選択された言語コード（ja含む）
+  translations?: Record<string, string>; // 言語コード → 確定翻訳テキスト
+  translatedTimedLines?: Record<string, TimedLine[]>; // 言語コード → タイムライン訳
   // Legacy single-attachment fields (pre-v2)
   attachmentUrl?: string;
   attachmentName?: string;
