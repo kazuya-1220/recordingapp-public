@@ -12,6 +12,9 @@ import { loadUserPromptSettings, buildExtraInstruction } from './PromptSettings'
 import { ScrollToTop } from './ScrollToTop';
 import { GeminiAssistant } from './GeminiAssistant';
 import { getAssistantSettings } from '../lib/assistant';
+import { LanguageMenu } from './LanguageMenu';
+import { TranscriptBody, TranscriptLangTabs } from './TranscriptBody';
+import { SOURCE_LANGUAGE, normalizeLanguages, translationTargets } from '../lib/languages';
 
 const NUM_BARS = 13;
 const BAR_W = 4;
@@ -136,6 +139,13 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
   const [silenceWarning, setSilenceWarning] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [feedTab, setFeedTab] = useState<'tl' | 'raw'>('tl');
+  // 同時翻訳：この会話で使う言語（ja含む）と、録音中の参考訳（liveTranslations）。
+  // どちらも liveSessions 経由で LiveView と同期する。transcriptLang は表示中の言語。
+  const [translationLanguages, setTranslationLanguages] = useState<string[]>([SOURCE_LANGUAGE]);
+  const [liveTranslations, setLiveTranslations] = useState<Record<string, string>>({});
+  const [transcriptLang, setTranscriptLang] = useState<string>(SOURCE_LANGUAGE);
+  const liveTranslateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTranslatedTextRef = useRef<string>('');
   const [triggerWord] = useState(() => getAssistantSettings().triggerWord);
   const [transcriptFullscreen, setTranscriptFullscreen] = useState(false);
   const [micLabel, setMicLabel] = useState('');
@@ -381,6 +391,13 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
       if (data.liveAttachments && Array.isArray(data.liveAttachments)) {
         setLiveAttachments(data.liveAttachments);
       }
+      // 翻訳言語（LiveView 側からの変更も反映）と、参考訳を同期
+      if (Array.isArray(data.translationLanguages)) {
+        setTranslationLanguages(normalizeLanguages(data.translationLanguages));
+      }
+      if (data.liveTranslations && typeof data.liveTranslations === 'object') {
+        setLiveTranslations(data.liveTranslations);
+      }
       // Reconcile local attachmentItems against Firestore recorderAttachments
       // This handles deletions performed from the LiveView side
       if (data.recorderAttachments && Array.isArray(data.recorderAttachments)) {
@@ -400,6 +417,44 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
       await setDoc(doc(db, 'liveSessions', sid), data, { merge: true });
     } catch (e) { console.warn('[Session sync]', e); }
   };
+
+  // 録音中のライブ翻訳（参考情報・やや遅行OK）。live の Web Speech テキストが伸びたら
+  // デバウンスして /api/translate を呼び、結果を liveSessions.liveTranslations に書く。
+  // これで LiveView（別端末）にも参考訳が届く。失敗は参考用途なので無視する。
+  useEffect(() => {
+    const targets = translationTargets(translationLanguages);
+    if (!isRecording || targets.length === 0) return;
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === lastTranslatedTextRef.current) return;
+    if (liveTranslateTimerRef.current) clearTimeout(liveTranslateTimerRef.current);
+    liveTranslateTimerRef.current = setTimeout(async () => {
+      const snapshot = text.trim();
+      if (!snapshot || snapshot === lastTranslatedTextRef.current) return;
+      lastTranslatedTextRef.current = snapshot;
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: snapshot, targets }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.translations && Object.keys(data.translations).length > 0) {
+            syncSessionUpdate({ liveTranslations: data.translations });
+          }
+        }
+      } catch { /* 参考訳なので失敗は無視 */ }
+    }, 4000);
+    return () => { if (liveTranslateTimerRef.current) clearTimeout(liveTranslateTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, isRecording, translationLanguages]);
+
+  // 選択言語が変わって現在表示中の言語が対象外になったら原文に戻す
+  useEffect(() => {
+    if (transcriptLang !== SOURCE_LANGUAGE && !translationLanguages.includes(transcriptLang)) {
+      setTranscriptLang(SOURCE_LANGUAGE);
+    }
+  }, [translationLanguages, transcriptLang]);
 
   const deleteLiveAttachment = (att: FSAttachment) => {
     const sid = sessionIdRef.current;
@@ -762,6 +817,26 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
 
       formData.append('text', finalText);
 
+      // 確定翻訳（保存版）：選択された各言語へ、きれいな最終文字起こしを翻訳して保存する。
+      // 録音中の参考訳ではなく、確定した文字起こしを訳し直すことで履歴には高精度版が残る。
+      let finalTranslations: Record<string, string> = {};
+      const finalTargets = translationTargets(translationLanguages);
+      if (finalTargets.length > 0 && finalText.trim()) {
+        try {
+          const trRes = await fetch('/api/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: finalText, targets: finalTargets }),
+          });
+          if (trRes.ok) {
+            const trData = await trRes.json();
+            if (trData.translations && typeof trData.translations === 'object') {
+              finalTranslations = trData.translations;
+            }
+          }
+        } catch { /* 翻訳失敗時は原文のみ保存 */ }
+      }
+
       const uploadRes = await fetch('/api/recordings', { method: 'POST', body: formData });
       const uploadResText = await uploadRes.text();
       let uploadedData: any;
@@ -804,6 +879,9 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
           participants: participantsList,
           participantEmails,
           attachments: uploadedData.attachments || [],
+          sourceLanguage: SOURCE_LANGUAGE,
+          translationLanguages: normalizeLanguages(translationLanguages),
+          ...(Object.keys(finalTranslations).length ? { translations: finalTranslations } : {}),
           ...(geminiResult ? { geminiResult } : {}),
         });
       } catch (firestoreErr) {
@@ -1215,7 +1293,18 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
           })()}
       </div>
 
-      {/* 3. Attachment */}
+      {/* 3. 翻訳言語設定 */}
+      <LanguageMenu
+        selected={translationLanguages}
+        accent="blue"
+        onChange={(next) => {
+          const norm = normalizeLanguages(next);
+          setTranslationLanguages(norm);
+          syncSessionUpdate({ translationLanguages: norm });
+        }}
+      />
+
+      {/* 4. Attachment */}
       <div className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-5 space-y-2">
           <h3 className="text-sm font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
             <Paperclip className="w-4 h-4 text-blue-600" />
@@ -1458,18 +1547,21 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
           {/* RIGHT COLUMN: transcript */}
       <div className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-tight">文字起こし</h2>
-            <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
-              <button type="button" onClick={() => setFeedTab('tl')}
-                className={`px-4 py-1.5 text-xs font-bold transition-colors ${feedTab === 'tl' ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
-                TL
-              </button>
-              <button type="button" onClick={() => setFeedTab('raw')}
-                className={`px-4 py-1.5 text-xs font-bold transition-colors border-l border-slate-200 dark:border-slate-600 ${feedTab === 'raw' ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
-                原文
-              </button>
-            </div>
+            <TranscriptLangTabs languages={translationLanguages} activeLang={transcriptLang} onSelect={setTranscriptLang} accent="blue" />
+            {transcriptLang === SOURCE_LANGUAGE && (
+              <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600">
+                <button type="button" onClick={() => setFeedTab('tl')}
+                  className={`px-4 py-1.5 text-xs font-bold transition-colors ${feedTab === 'tl' ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
+                  TL
+                </button>
+                <button type="button" onClick={() => setFeedTab('raw')}
+                  className={`px-4 py-1.5 text-xs font-bold transition-colors border-l border-slate-200 dark:border-slate-600 ${feedTab === 'raw' ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-600'}`}>
+                  原文
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {isRecording && (
@@ -1488,38 +1580,14 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
           </div>
         </div>
         <div className="bg-white dark:bg-slate-800 p-6 min-h-[180px] max-h-[55vh] overflow-y-auto">
-          {feedTab === 'tl' ? (
-            timedLines.length > 0 ? (
-              <div className="space-y-2.5">
-                {timedLines.map((line, i) => (
-                  <div key={i} className="flex gap-2.5 items-start text-sm">
-                    <span className="text-[11px] text-blue-500 dark:text-blue-400 shrink-0 mt-0.5 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded tabular-nums">
-                      {String(Math.floor(line.ms / 60000)).padStart(2, '0')}:{String(Math.floor((line.ms % 60000) / 1000)).padStart(2, '0')}
-                    </span>
-                    <span className="text-slate-700 dark:text-slate-300 leading-relaxed">{line.text}</span>
-                  </div>
-                ))}
-                {isRecording && (
-                  <div className="flex gap-2.5 items-center">
-                    <span className="text-[11px] text-slate-300 dark:text-slate-600 bg-slate-50 dark:bg-slate-700 px-1.5 py-0.5 rounded w-[3.5rem] text-center">…</span>
-                    <TypingDots />
-                  </div>
-                )}
-              </div>
-            ) : isRecording ? (
-              <p className="text-slate-400 text-center mt-8 text-sm flex items-center justify-center">音声認識中<TypingDots /></p>
-            ) : (
-              <p className="text-slate-400 italic text-center mt-8 text-sm">ここに文字起こしデータが表示されます。</p>
-            )
-          ) : (
-            text ? (
-              <p className="text-slate-700 dark:text-slate-300 leading-relaxed text-sm whitespace-pre-wrap">{text}</p>
-            ) : isRecording ? (
-              <p className="text-slate-400 text-center mt-8 text-sm flex items-center justify-center">音声認識中<TypingDots /></p>
-            ) : (
-              <p className="text-slate-400 italic text-center mt-8 text-sm">ここに文字起こしデータが表示されます。</p>
-            )
-          )}
+          <TranscriptBody
+            activeLang={transcriptLang}
+            feedTab={feedTab}
+            timedLines={timedLines}
+            rawText={text}
+            translations={liveTranslations}
+            isRecording={isRecording}
+          />
         </div>
       </div>
 
@@ -1552,38 +1620,14 @@ export function Recorder({ onViewChange, user, isActive = true }: { onViewChange
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
-              {feedTab === 'tl' ? (
-                timedLines.length > 0 ? (
-                  <div className="space-y-2.5">
-                    {timedLines.map((line, i) => (
-                      <div key={i} className="flex gap-2.5 items-start text-sm">
-                        <span className="text-[11px] text-blue-500 dark:text-blue-400 shrink-0 mt-0.5 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded tabular-nums">
-                          {String(Math.floor(line.ms / 60000)).padStart(2, '0')}:{String(Math.floor((line.ms % 60000) / 1000)).padStart(2, '0')}
-                        </span>
-                        <span className="text-slate-700 dark:text-slate-300 leading-relaxed">{line.text}</span>
-                      </div>
-                    ))}
-                    {isRecording && (
-                      <div className="flex gap-2.5 items-center">
-                        <span className="text-[11px] text-slate-300 dark:text-slate-600 bg-slate-50 dark:bg-slate-700 px-1.5 py-0.5 rounded w-[3.5rem] text-center">…</span>
-                        <TypingDots />
-                      </div>
-                    )}
-                  </div>
-                ) : isRecording ? (
-                  <p className="text-slate-400 text-center mt-8 text-sm flex items-center justify-center">音声認識中<TypingDots /></p>
-                ) : (
-                  <p className="text-slate-400 italic text-center mt-8 text-sm">ここに文字起こしデータが表示されます。</p>
-                )
-              ) : (
-                text ? (
-                  <p className="text-slate-700 dark:text-slate-300 leading-relaxed text-sm whitespace-pre-wrap">{text}</p>
-                ) : isRecording ? (
-                  <p className="text-slate-400 text-center mt-8 text-sm flex items-center justify-center">音声認識中<TypingDots /></p>
-                ) : (
-                  <p className="text-slate-400 italic text-center mt-8 text-sm">ここに文字起こしデータが表示されます。</p>
-                )
-              )}
+              <TranscriptBody
+                activeLang={transcriptLang}
+                feedTab={feedTab}
+                timedLines={timedLines}
+                rawText={text}
+                translations={liveTranslations}
+                isRecording={isRecording}
+              />
             </div>
           </div>
         </div>
