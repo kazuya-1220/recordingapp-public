@@ -11,10 +11,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Public demo: any signed-in, email-verified Google account is allowed.
+    // 課題（デモ）用：Googleログインを行わず匿名認証で利用するため、サインイン済み
+    // （匿名を含む）であれば許可する。所有者スコープは uid で担保する。
     function isTaxBrainUser() {
-      return isSignedIn() &&
-             request.auth.token.email_verified == true;
+      return isSignedIn();
     }
 
     function isOwner(userId) {
